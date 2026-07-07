@@ -1,6 +1,8 @@
-# Data (see data/README.md - not tracked in this repo)
+# Data (see data/README.md - most raw/processed data not tracked in this repo)
 data/*
 !data/README.md
+!data/bmore_hourly_avg_filtered_eastern_time.csv
+!data/bmore_daily_avg_filtered_eastern_time.csv
 
 # R
 .Rhistory
@@ -13,6 +15,7 @@ data/*
 *.tiff
 *.png
 !arduino/**/*.png
+!assets/*.png
 figures/
 
 # OS

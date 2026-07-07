@@ -1,5 +1,9 @@
 # Breathe Baltimore: Low-Cost Sensor Network Analysis
 
+<p align="center">
+  <img src="assets/breathe_baltimore_logo.png" alt="Breathe Baltimore logo" width="220">
+</p>
+
 Code accompanying:
 
 > Neftaliem, L., Rich, R. L., Mady, R., Jackson, R. B., Field, C. B., Brown Jr., D., Lucchese, V. M., LaGorga, L., Vishwanath, L. R., Smith, T., & Cawood, A. **Pollution inequity and social vulnerability: evidence from a low-cost sensor network in Baltimore, Maryland.** *In preparation.*
@@ -37,13 +41,15 @@ To reproduce the analysis locally, recreate the following structure inside a `da
 
 ```
 data/
-  sensor_data/                        # per-site raw logs (for bmore_paper_analysis_share.Rmd)
-  current_data/                       # AQM_206 co-location files (for vaisala_arduino_comparison_share.Rmd)
-  Cal_Stations/<site>/                # site-specific calibration CSVs
-  NRI_Table_CensusTracts.csv          # CDC/ATSDR Social Vulnerability Index by census tract
+  bmore_hourly_avg_filtered_eastern_time.csv  # included in this repo — pre-computed hourly averages
+  bmore_daily_avg_filtered_eastern_time.csv   # included in this repo — pre-computed daily averages
+  sensor_data/                        # not included — per-site raw logs (for bmore_paper_analysis_share.Rmd)
+  current_data/                       # not included — AQM_206 co-location files (for vaisala_arduino_comparison_share.Rmd)
+  Cal_Stations/<site>/                # not included — site-specific calibration CSVs
+  NRI_Table_CensusTracts.csv          # not included — CDC/ATSDR Social Vulnerability Index by census tract
 ```
 
-`vaisala_arduino_comparison_share.Rmd` falls back to generating synthetic sample data if the expected co-location files are not found, so the calibration pipeline can be inspected without the private dataset. `bmore_paper_analysis_share.Rmd` and `social_vulnerability_map.R` require the actual data files to run to completion.
+`vaisala_arduino_comparison_share.Rmd` falls back to generating synthetic sample data if the expected co-location files are not found, so the calibration pipeline can be inspected without the private dataset. With `bmore_hourly_avg_filtered_eastern_time.csv` and `bmore_daily_avg_filtered_eastern_time.csv` included in `data/`, `bmore_paper_analysis_share.Rmd` will detect them and skip straight to the modeling/figure stages instead of re-running raw ingestion and calibration. `social_vulnerability_map.R` still requires `NRI_Table_CensusTracts.csv` to run to completion.
 
 This layout, along with file formats and column structure, has been verified against the real project data. Note that `NRI_Table_CensusTracts.csv` (~625 MB) and the full `sensor_data/` collection (~110 MB zipped) are too large for a normal git repo — see `data/README.md` for details and a suggested Zenodo/Dryad path if you want the processed data version-controlled or citable.
 
@@ -57,10 +63,10 @@ This layout, along with file formats and column structure, has been verified aga
 
 Code in this repository is released under the MIT License (see `LICENSE`). This applies to the code only — see the paper for data licensing/citation terms once the data are formally deposited.
 
+## Who's involved?
+
+This project is a collaboration between the [Environmental Justice Journalism Initiative (EJJI)](https://www.ejji.org/) and the [Smithsonian Environmental Research Center (SERC)](https://serc.si.edu/). Site stewards and volunteers from the community play an essential role in maintaining the sensors and gathering data.
+
 ## Acknowledgements
 
-This work was conducted in partnership with the Smithsonian Environmental Research Center (SERC) and community partners across Baltimore who hosted and maintained monitoring units. See the manuscript for full acknowledgements.
-
-## Contact
-
-Corresponding author: Leona Neftaliem (lneftaliem@gmail.com)
+This work was conducted in partnership with EJJI and SERC, and with community partners across Baltimore who hosted and maintained monitoring units. See the manuscript for full acknowledgements.
