@@ -19,7 +19,7 @@ data/*
 *.tiff
 *.png
 !arduino/**/*.png
-!assets/*.png
+!images/*.png
 figures/
 
 # OS

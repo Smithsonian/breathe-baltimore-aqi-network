@@ -1,7 +1,7 @@
 # Breathe Baltimore: Low-Cost Sensor Network Analysis
 
 <p align="center">
-  <img src="assets/breathe_baltimore_logo.png" alt="Breathe Baltimore logo" width="220">
+  <img src="images/breathebalitmore_logo.png" alt="Breathe Baltimore logo" width="220">
 </p>
 
 Code accompanying:
