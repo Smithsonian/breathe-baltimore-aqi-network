@@ -10,7 +10,13 @@ Code accompanying:
 
 This repository contains the analysis code and Arduino firmware used to deploy and analyze a network of low-cost particulate matter (PM2.5/PM10) and temperature sensors across Baltimore, Maryland, and to relate exposure patterns to social vulnerability and historical redlining (HOLC grades).
 
-## Repository Structure
+## Overview
+
+Breathe Baltimore is a community-based research project aimed at addressing air quality issues in Baltimore. The project brings together local communities, researchers, and volunteers to collect hyperlocal air quality data in neighborhoods where there is a lack of information on outdoor air pollutants. This data helps us better understand environmental conditions and how they impact the health and well-being of residents.
+
+To learn more about each pollutant and their effects, [visit the project website](https://www.ejji.org/air-quality-monitoring-in-baltimore).
+
+## Repository structure
 
 ```
 code/
@@ -32,7 +38,7 @@ data/                    # Hourly/daily CSVs, Cal_Stations, current_data, and NR
                           # (compressed); only sensor_data/ is not included (see Data availability below).
 ```
 
-## Data Availability
+## Data availability
 
 Most processed and calibration data is included directly in this repository (compressed — see `data/README.md` for exact filenames and one-line reassembly/decompress commands). The one exception is the raw per-site sensor logs, which are too large and voluminous for this workflow and are instead available at:
 
@@ -69,10 +75,10 @@ This layout, along with file formats and column structure, has been verified aga
 
 Code in this repository is released under the MIT License (see `LICENSE`). This applies to the code only — see the paper for data licensing/citation terms once the data are formally deposited.
 
-## Who's Involved?
+## Who's involved?
 
 This project is a collaboration between the [Environmental Justice Journalism Initiative (EJJI)](https://www.ejji.org/) and the [Smithsonian Environmental Research Center (SERC)](https://serc.si.edu/). Site stewards and volunteers from the community play an essential role in maintaining the sensors and gathering data.
 
 ## Acknowledgements
 
-This work was conducted in partnership with EJJI and SERC, and with community partners across Baltimore who hosted and maintained monitoring units. 
+This work was conducted in partnership with EJJI and SERC, and with community partners across Baltimore who hosted and maintained monitoring units. See the manuscript for full acknowledgements.
