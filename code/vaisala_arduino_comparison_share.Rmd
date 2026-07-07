@@ -1,0 +1,2172 @@
+---
+title: "Vaisala vs Arduino Data Comparison"
+author: "Leona Neftaliem"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(message = FALSE, warning = FALSE, error = FALSE)
+```
+
+# Libraries
+```{r}
+library(dplyr)
+library(lubridate)
+library(tidyverse)
+library(ggplot2)
+library(scales)
+library(Metrics)
+library(ranger)      # Random forest models
+
+# Helper function to parse incoming ET/EST timestamps and convert them to UTC
+parse_to_utc <- function(ts, format = NULL) {
+  if (is.null(ts)) return(NULL)
+  
+  # If it is already a POSIXct/POSIXlt object
+  if (inherits(ts, "POSIXt")) {
+    # If the timezone is already UTC, return it. Otherwise, force to America/New_York and convert to UTC
+    if (identical(tz(ts), "UTC")) {
+      return(ts)
+    } else {
+      return(lubridate::with_tz(lubridate::force_tz(ts, "America/New_York"), "UTC"))
+    }
+  }
+  
+  # Handle character/factor timestamps
+  ts_str <- as.character(ts)
+  
+  # Clean up ISO 8601 formatting like 'Z' or 'T' if present
+  # because all incoming data is in ET/EST, even if mislabeled with a Z
+  ts_str <- gsub("Z$", "", ts_str)
+  ts_str <- gsub("T", " ", ts_str)
+  
+  # Try parsing with format if provided
+  if (!is.null(format)) {
+    parsed <- as.POSIXct(ts_str, format = format, tz = "America/New_York")
+    return(lubridate::with_tz(parsed, "UTC"))
+  }
+  
+  # Try parsing with common formats
+  formats <- c("%Y-%m-%d %H:%M:%S", "%m/%d/%Y %H:%M:%S", "%Y-%m-%d %H:%M", "%m/%d/%Y %H:%M", "%Y-%m-%d", "%m/%d/%Y")
+  for (fmt in formats) {
+    parsed <- as.POSIXct(ts_str, format = fmt, tz = "America/New_York")
+    if (!all(is.na(parsed))) {
+      return(lubridate::with_tz(parsed, "UTC"))
+    }
+  }
+  
+  # Fallback to general parsing
+  parsed <- as.POSIXct(ts_str, tz = "America/New_York")
+  return(lubridate::with_tz(parsed, "UTC"))
+}
+```
+
+# Overview
+
+This script builds calibration models to correct low-cost Arduino sensor readings 
+using co-located Vaisala reference data. It produces regression equations that can 
+be applied to any Arduino sensor deployment.
+
+## How Calibration Works
+
+1. **Co-locate** an Arduino sensor next to a Vaisala reference monitor
+2. **Match** their readings by timestamp (rounded to the nearest hour)
+3. **Fit** a regression model: `Vaisala = intercept + slope×Arduino + slope×humidity + slope×temp`
+4. **Apply** the model to correct future Arduino readings
+
+## Data Sources
+
+- **General calibration**: Built from the original AQM_206 co-location data 
+  (`AQM_206_AQM_ArduinoTable.dat`, `AQM_206_AQM_ArduinoTable2.dat`, `AQM_206_AQM_VaisalaTable.dat`)
+- **Site-specific calibrations**: Built from SERC calibration CSVs 
+  (`Strength2LoveFarm_SERCCal.csv`, `BayBrookElementary_SERCCal.csv`, `VaisalaTable.csv`)
+
+## Minimum Data Requirements
+
+All calibrations use **hourly** matched data, so **1 day = 24 data points**.
+
+- **To fit (create) a model**: Need at least **24 hourly observations** (1 day of co-location)
+- **To apply an existing model**: No minimum—works on any amount of data
+
+This means if you have a short deployment (e.g., 6-7 days at the Baltimore dock), 
+you can either:
+1. **Apply** the pre-existing general calibration to your data (no minimum needed), or
+2. **Fit** a new site-specific model if you have at least 1 day of co-located reference data
+
+# Calibration Settings
+```{r calibration-settings}
+# Minimum number of HOURLY data points needed to fit a calibration model.
+# 24 hours = 1 day of co-location. This applies to both general and site-specific models.
+# Applying an existing model has no minimum—it works on any amount of data.
+min_hours_for_calibration <- 24
+
+# Helper function to handle predictions for both RF and LM 
+predict_best_model <- function(mi, newdata) {
+  if (is.null(mi) || is.null(mi$model)) return(NULL)
+  
+  m_type <- if(!is.null(mi$model_type)) mi$model_type else "rf"
+  
+  if (m_type == "lm") {
+    # Linear Model prediction
+    return(as.numeric(predict(mi$model, newdata = newdata)))
+  } else if (m_type == "bias_only") {
+    # Bias-correction (Mean shift)
+    return(rep(as.numeric(mi$bias_value), nrow(newdata)))
+  } else {
+    # Random Forest (ranger) prediction
+    return(as.numeric(predict(mi$model, data = newdata)$predictions))
+  }
+}
+
+# Sensors that have lab co-location data and are eligible for the
+# site-specific second-stage linear correction (applied from 2026-12-01 onward).
+# Fill in the actual sensor IDs that appear in your deployment data.
+# Example: calibrated_sensors <- c("SENSOR_A", "SENSOR_B")
+calibrated_sensors <- character(0)   # <-- populate with your sensor IDs
+
+# Date after which site-specific correction is applied to calibrated sensors.
+# Before this date all sensors use the general RF correction.
+calibration_cutoff_date <- as.Date("2025-12-01")
+
+cat("Calibration settings:\n")
+cat("  Minimum hours for fitting a model:", min_hours_for_calibration,
+    "(", min_hours_for_calibration/24, "day(s) of co-location)\n")
+cat("  Calibration cutoff date:", as.character(calibration_cutoff_date), "\n")
+cat("  Sensors with lab data (calibrated_sensors):",
+    if(length(calibrated_sensors) == 0) "<none set>" else paste(calibrated_sensors, collapse = ", "), "\n")
+```
+
+# Data Loading
+```{r}
+# Place raw co-location files (see data/README.md) in data/current_data/,
+# and site-specific calibration folders in data/Cal_Stations/
+data_dir <- "data/current_data"
+
+# Load the three data files
+arduino1_file <- file.path(data_dir, "AQM_206_AQM_ArduinoTable.dat")
+arduino2_file <- file.path(data_dir, "AQM_206_AQM_ArduinoTable2.dat")
+vaisala_file <- file.path(data_dir, "AQM_206_AQM_VaisalaTable.dat")
+
+# Check if files exist
+has_data <- any(file.exists(c(arduino1_file, arduino2_file, vaisala_file)))
+cat("Has data files:", has_data, "\n")
+```
+
+# -------------------------------------------------------------------------
+# DATA PROCESSING & INGESTION
+# -------------------------------------------------------------------------
+# Load raw sensor and reference (Vaisala) data. 
+# Handles multiple encodings and provides sample data fallbacks.
+# -------------------------------------------------------------------------
+```{r}
+# Define column structures
+vaisala_columns <- c("timestamp", "record", "vaisalaString", "no2_ppb", "co_ppb", "no_ppb", "o3_ppb", "pm1_ugm3", "pm25_ugm3", "pm10_ugm3", "air_pres_pa", "air_temp_c", "humidity_perc_rh")
+arduino_columns <- c("timestamp", "record", "arduinostring", "rtctime", "sl_id", "program", "ard_temp_c", "ard_press_pa", "ard_humidity_perc_rh", "ard_voc", "ard_alt", "ard_co2_ppm", "ard_o3_ppb", "ard_pm1_1_ugm3", "ard_pm25_1_ugm3", "ard_pm10_1_ugm3", "ard_pm1_2_ugm3", "ard_pm25_2_ugm3", "ard_pm10_2_ugm3")
+
+# Load data or generate sample data
+if(has_data) {
+  cat("Loading real data files...\n")
+  
+  # Function to safely read CSV files with encoding handling
+  safe_read_csv <- function(file_path, columns, skip_lines = 3) {
+    if(!file.exists(file_path)) {
+      cat("File does not exist:", basename(file_path), "\n")
+      return(NULL)
+    }
+    
+    # Try different encodings
+    encodings <- c("UTF-8", "latin1", "ISO-8859-1", "windows-1252")
+    
+    for(enc in encodings) {
+      tryCatch({
+        # Read as character first to avoid type conversion errors
+        data <- read.csv(file_path, header=TRUE, skip=skip_lines, 
+                        fileEncoding=enc, stringsAsFactors=FALSE,
+                        check.names=FALSE, quote="\"", comment.char="",
+                        as.is=TRUE)
+        
+        # Verify we got data
+        if(nrow(data) > 0 && ncol(data) > 0) {
+          colnames(data) <- columns
+          cat("Successfully loaded", basename(file_path), "with encoding:", enc, "\n")
+          return(data)
+        }
+      }, error = function(e) {
+        # Try next encoding
+        return(NULL)
+      })
+    }
+    
+    # If all encodings fail, try without specifying encoding
+    tryCatch({
+      data <- read.csv(file_path, header=TRUE, skip=skip_lines, 
+                      stringsAsFactors=FALSE, check.names=FALSE,
+                      fileEncoding="", quote="\"", comment.char="",
+                      as.is=TRUE)
+      colnames(data) <- columns
+      cat("Successfully loaded", basename(file_path), "with default encoding\n")
+      return(data)
+    }, error = function(e) {
+      cat("Error loading", basename(file_path), ":", e$message, "\n")
+      return(NULL)
+    })
+  }
+  
+  arduino1_data <- safe_read_csv(arduino1_file, arduino_columns)
+  arduino2_data <- safe_read_csv(arduino2_file, arduino_columns)
+  vaisala_data <- safe_read_csv(vaisala_file, vaisala_columns)
+  
+  # Check if any files failed to load
+  if(is.null(arduino1_data) || is.null(arduino2_data) || is.null(vaisala_data)) {
+    cat("Warning: Some files failed to load. Falling back to sample data generation.\n")
+    has_data <- FALSE
+  }
+}
+
+# Generate sample data if files don't exist or failed to load
+if(!has_data) {
+  cat("Generating sample data for demonstration...\n")
+  
+  # Generate sample data
+  set.seed(123)
+  n_points <- 1000
+  
+  # Create sample timestamps in UTC (converted from America/New_York)
+  start_time <- parse_to_utc("2024-01-01 00:00:00")
+  timestamps <- start_time + seq(0, n_points * 3600, by = 3600)  # Hourly data
+  
+  # Generate sample Arduino data
+  arduino1_data <- data.frame(
+    timestamp = timestamps[1:n_points],
+    record = 1:n_points,
+    arduinostring = paste0("arduino1_", 1:n_points),
+    rtctime = timestamps[1:n_points],
+    sl_id = rep("A001", n_points),
+    program = rep("AQM", n_points),
+    ard_temp_c = rnorm(n_points, 20, 5),
+    ard_press_pa = rnorm(n_points, 101325, 1000),
+    ard_humidity_perc_rh = rnorm(n_points, 50, 15),
+    ard_voc = rnorm(n_points, 100, 20),
+    ard_alt = rnorm(n_points, 100, 10),
+    ard_co2_ppm = rnorm(n_points, 400, 50),
+    ard_o3_ppb = rnorm(n_points, 30, 10),
+    ard_pm1_1_ugm3 = rnorm(n_points, 5, 2),
+    ard_pm25_1_ugm3 = rnorm(n_points, 10, 5),
+    ard_pm10_1_ugm3 = rnorm(n_points, 15, 8),
+    ard_pm1_2_ugm3 = rnorm(n_points, 5, 2),
+    ard_pm25_2_ugm3 = rnorm(n_points, 10, 5),
+    ard_pm10_2_ugm3 = rnorm(n_points, 15, 8)
+  )
+  
+  arduino2_data <- arduino1_data
+  arduino2_data$arduinostring <- paste0("arduino2_", 1:n_points)
+  
+  # Generate sample Vaisala data
+  vaisala_data <- data.frame(
+    timestamp = timestamps[1:n_points],
+    record = 1:n_points,
+    vaisalaString = paste0("vaisala_", 1:n_points),
+    no2_ppb = rnorm(n_points, 20, 5),
+    co_ppb = rnorm(n_points, 1, 0.5),
+    no_ppb = rnorm(n_points, 5, 2),
+    o3_ppb = rnorm(n_points, 35, 8),
+    pm1_ugm3 = rnorm(n_points, 6, 2),
+    pm25_ugm3 = rnorm(n_points, 12, 4),
+    pm10_ugm3 = rnorm(n_points, 18, 6),
+    air_pres_pa = rnorm(n_points, 101325, 1000),
+    air_temp_c = rnorm(n_points, 20, 5),
+    humidity_perc_rh = rnorm(n_points, 50, 15)
+  )
+}
+
+# Convert timestamps to UTC (from America/New_York) and add unit identifiers
+arduino1_data$timestamp <- parse_to_utc(arduino1_data$timestamp, format = "%Y-%m-%d %H:%M:%S")
+arduino2_data$timestamp <- parse_to_utc(arduino2_data$timestamp, format = "%Y-%m-%d %H:%M:%S")
+vaisala_data$timestamp <- parse_to_utc(vaisala_data$timestamp, format = "%Y-%m-%d %H:%M:%S")
+
+arduino1_data$datetime <- arduino1_data$timestamp
+arduino2_data$datetime <- arduino2_data$timestamp
+vaisala_data$datetime <- vaisala_data$timestamp
+
+arduino1_data$unit <- "Arduino_1"
+arduino2_data$unit <- "Arduino_2" 
+vaisala_data$unit <- "Vaisala"
+
+# Clean data: Convert NaN and -7999 to NA, then remove rows with NA
+arduino1_clean <- arduino1_data %>%
+  mutate(across(everything(), ~ {
+    if (is.character(.)) {
+      x <- na_if(., "NAN")
+      x[x == "-7999"] <- NA
+      x
+    } else if (is.numeric(.)) {
+      x <- .
+      x[is.nan(x) | x == -7999] <- NA
+      x
+    } else {
+      .
+    }
+  })) %>%
+  drop_na()
+
+arduino2_clean <- arduino2_data %>%
+  mutate(across(everything(), ~ {
+    if (is.character(.)) {
+      x <- na_if(., "NAN")
+      x[x == "-7999"] <- NA
+      x
+    } else if (is.numeric(.)) {
+      x <- .
+      x[is.nan(x) | x == -7999] <- NA
+      x
+    } else {
+      .
+    }
+  })) %>%
+  drop_na()
+
+vaisala_clean <- vaisala_data %>%
+  mutate(across(everything(), ~ {
+    # If the column is character, replace "NaN" string with NA
+    if (is.character(.)) {
+      na_if(., "NAN")
+    # If numeric, replace actual NaN values with NA
+    } else if (is.numeric(.)) {
+      x <- .
+      x[is.nan(x)] <- NA
+      x
+    # Otherwise, leave as is
+    } else {
+      .
+    }
+  })) %>%
+  drop_na() 
+
+cat("Data cleaning completed:\n")
+cat("- Arduino1: ", nrow(arduino1_data), " -> ", nrow(arduino1_clean), " rows\n")
+cat("- Arduino2: ", nrow(arduino2_data), " -> ", nrow(arduino2_clean), " rows\n")
+cat("- Vaisala: ", nrow(vaisala_data), " -> ", nrow(vaisala_clean), " rows\n")
+```
+
+
+# -------------------------------------------------------------------------
+# DATA PREPARATION & ALIGNMENT
+# -------------------------------------------------------------------------
+# Aligns Arduino and Vaisala timestamps to create a synchronized 
+# training dataset (all_data_hourly).
+# -------------------------------------------------------------------------
+```{r}
+# Create averaged Arduino data before developing corrections
+cat("Creating averaged Arduino dataset for more robust corrections...\n")
+
+
+# Ensure both datasets have POSIXct timestamp columns in UTC
+arduino1_data$timestamp <- parse_to_utc(arduino1_data$timestamp)
+arduino2_data$timestamp <- parse_to_utc(arduino2_data$timestamp)
+  
+# Prepare Arduino data columns for averaging
+arduino1_prep <- arduino1_clean %>%
+  dplyr::select(timestamp, ard_o3_ppb, ard_pm1_1_ugm3, ard_pm25_1_ugm3, ard_pm10_1_ugm3, ard_temp_c, ard_humidity_perc_rh)
+
+arduino2_prep <- arduino2_clean %>%
+  dplyr::select(timestamp, ard_o3_ppb, ard_pm1_1_ugm3, ard_pm25_1_ugm3, ard_pm10_1_ugm3, ard_temp_c, ard_humidity_perc_rh)
+
+# Merge Arduino datasets by timestamp (full join so it works even if one unit is empty)
+arduino_merged <- full_join(
+  arduino1_prep,
+  arduino2_prep,
+  by = "timestamp",
+  suffix = c("_a1", "_a2")
+)
+
+# Average the two Arduino units for each pollutant (falls back to the one available)
+arduino_avg <- arduino_merged %>%
+  mutate(
+    o3_ppm = rowMeans(cbind(as.numeric(ard_o3_ppb_a1), as.numeric(ard_o3_ppb_a2)), na.rm = TRUE) / 1000,
+    pm1_ugm3 = rowMeans(cbind(as.numeric(ard_pm1_1_ugm3_a1), as.numeric(ard_pm1_1_ugm3_a2)), na.rm = TRUE),
+    pm25_ugm3 = rowMeans(cbind(as.numeric(ard_pm25_1_ugm3_a1), as.numeric(ard_pm25_1_ugm3_a2)), na.rm = TRUE),
+    pm10_ugm3 = rowMeans(cbind(as.numeric(ard_pm10_1_ugm3_a1), as.numeric(ard_pm10_1_ugm3_a2)), na.rm = TRUE),
+    temp_c = rowMeans(cbind(as.numeric(ard_temp_c_a1), as.numeric(ard_temp_c_a2)), na.rm = TRUE),
+    humidity_perc_rh = rowMeans(cbind(as.numeric(ard_humidity_perc_rh_a1), as.numeric(ard_humidity_perc_rh_a2)), na.rm = TRUE),
+    unit = "Arduino_Averaged"
+  ) %>%
+  dplyr::select(timestamp, o3_ppm, pm1_ugm3, pm25_ugm3, pm10_ugm3, temp_c, humidity_perc_rh, unit)
+
+
+# Prepare Vaisala data
+vaisala_combined <- vaisala_clean %>%
+  dplyr::select(timestamp, record, o3_ppb, pm1_ugm3, pm25_ugm3, pm10_ugm3, air_temp_c, humidity_perc_rh) %>%
+  mutate(
+    unit = "Vaisala", 
+    timestamp_rounded = timestamp,
+    temp_c = as.numeric(air_temp_c),  # Convert to numeric
+    o3_ppm = as.numeric(o3_ppb) / 1000,
+    pm1_ugm3 = as.numeric(pm1_ugm3),
+    pm25_ugm3 = as.numeric(pm25_ugm3),
+    pm10_ugm3 = as.numeric(pm10_ugm3),
+    humidity_perc_rh = as.numeric(humidity_perc_rh)
+  ) %>%
+  dplyr::select(-air_temp_c, -o3_ppb)  # Remove the old column name
+
+
+# Combine data using inner join to match timestamps
+all_data <- inner_join(arduino_avg, vaisala_combined, by = "timestamp", suffix = c("_arduino", "_vaisala")) %>%
+  dplyr::select(
+    timestamp,
+    # Arduino measurements
+    o3_ppm_arduino, pm1_ugm3_arduino, pm25_ugm3_arduino, pm10_ugm3_arduino,
+    temp_c_arduino, humidity_perc_rh_arduino,
+    # Vaisala measurements  
+    o3_ppm_vaisala, pm1_ugm3_vaisala, pm25_ugm3_vaisala, pm10_ugm3_vaisala,
+    temp_c_vaisala, humidity_perc_rh_vaisala
+  )
+
+# Aggregate to HOURLY data (for consistent calibration approach)
+cat("Aggregating data to hourly level...\n")
+
+# Ensure timestamp is POSIXct in UTC
+all_data <- all_data %>%
+  mutate(timestamp = parse_to_utc(timestamp))
+
+all_data_hourly <- all_data %>%
+  mutate(timestamp_hour = floor_date(timestamp, unit = "hour")) %>%
+  group_by(timestamp_hour) %>%
+  summarise(
+    # Arduino measurements - hourly means
+    o3_ppm_arduino = mean(o3_ppm_arduino, na.rm = TRUE),
+    pm1_ugm3_arduino = mean(pm1_ugm3_arduino, na.rm = TRUE),
+    pm25_ugm3_arduino = mean(pm25_ugm3_arduino, na.rm = TRUE),
+    pm10_ugm3_arduino = mean(pm10_ugm3_arduino, na.rm = TRUE),
+    temp_c_arduino = mean(temp_c_arduino, na.rm = TRUE),
+    humidity_perc_rh_arduino = mean(humidity_perc_rh_arduino, na.rm = TRUE),
+    # Vaisala measurements - hourly means
+    o3_ppm_vaisala = mean(o3_ppm_vaisala, na.rm = TRUE),
+    pm1_ugm3_vaisala = mean(pm1_ugm3_vaisala, na.rm = TRUE),
+    pm25_ugm3_vaisala = mean(pm25_ugm3_vaisala, na.rm = TRUE),
+    pm10_ugm3_vaisala = mean(pm10_ugm3_vaisala, na.rm = TRUE),
+    temp_c_vaisala = mean(temp_c_vaisala, na.rm = TRUE),
+    humidity_perc_rh_vaisala = mean(humidity_perc_rh_vaisala, na.rm = TRUE),
+    .groups = 'drop'
+  ) %>%
+  rename(timestamp = timestamp_hour)
+
+# Report dataset summary
+n_hours <- nrow(all_data_hourly)
+n_days <- n_hours / 24
+date_range <- range(as.Date(all_data_hourly$timestamp))
+
+cat("\n--- General Calibration Data Summary ---\n")
+cat("Total hourly observations:", n_hours, "\n")
+cat("Equivalent days:", round(n_days, 1), "\n")
+cat("Date range:", as.character(date_range[1]), "to", as.character(date_range[2]), "\n")
+
+if(n_hours >= min_hours_for_calibration) {
+  cat("Status: SUFFICIENT for calibration (", n_hours, " >= ", min_hours_for_calibration, " hours)\n", sep = "")
+} else {
+  cat("Status: INSUFFICIENT for calibration (", n_hours, " < ", min_hours_for_calibration, " hours)\n", sep = "")
+}
+
+# Use hourly data for modeling
+all_data <- all_data_hourly
+
+# --- Step 2: Hourly observation warning for calibrated sensors ---
+# Flag any calibrated sensor whose colocation period has < 72 hourly observations.
+# 72 hours = 3 full days — a practical minimum for reliable RF training.
+if(length(calibrated_sensors) > 0) {
+  cat("\n--- Calibrated Sensor Hourly Observation Check ---\n")
+  # The general all_data represents the colocation period for the general model.
+  # Site-specific sensors are checked again inside create_site_calibration_models.
+  cat("Calibrated sensors will be checked for >= 72 hourly obs in their site-specific colocation data.\n")
+  cat("(General colocation hourly obs:", n_hours, ")\n")
+}
+
+```
+
+# General Calibration Model
+```{r general-model}
+# General Model Creation (Stage 1)
+# Ozone: Forced MLR for stability on flat signals.
+# PM: Random Forest for non-linear RH/Temp effects.
+create_general_calibration_models <- function(all_data) {
+  if(nrow(all_data) == 0) {
+    cat("No data available for modeling.\n")
+    return(NULL)
+  }
+
+  target_params  <- c("o3_ppm", "pm1_ugm3", "pm25_ugm3", "pm10_ugm3")
+  general_models <- list()
+
+  for(param in target_params) {
+    arduino_col <- paste0(param, "_arduino")
+    vaisala_col <- paste0(param, "_vaisala")
+
+    if(!(arduino_col %in% colnames(all_data)) || !(vaisala_col %in% colnames(all_data))) {
+      cat("Missing columns for", param, "\n")
+      next
+    }
+
+    model_data <- all_data %>%
+      filter(
+        !is.na(.data[[arduino_col]]), !is.na(.data[[vaisala_col]]),
+        is.finite(.data[[arduino_col]]), is.finite(.data[[vaisala_col]]),
+        !is.na(temp_c_arduino), !is.na(humidity_perc_rh_arduino),
+        is.finite(temp_c_arduino), is.finite(humidity_perc_rh_arduino)
+      )
+
+    if(nrow(model_data) < min_hours_for_calibration) {
+      cat("Insufficient data for", param, "(", nrow(model_data), "hours; need ",
+          min_hours_for_calibration, ")\n")
+      next
+    }
+
+    # 80/20 random stratified split (replacing temporal split)
+    set.seed(42)
+    n_train <- floor(0.8 * nrow(model_data))
+    train_indices <- sample(seq_len(nrow(model_data)), n_train)
+    train_df <- model_data[train_indices, ]
+    test_df  <- model_data[-train_indices, ]
+
+    # --- Diagnostics (per user request) ---
+    cat(sprintf("\n--- Diagnostics for %s ---\n", param))
+    cat("  Training date range:", as.character(min(as.Date(train_df$timestamp))), 
+        "to", as.character(max(as.Date(train_df$timestamp))), "\n")
+    cat("  Unique dates in training:", length(unique(as.Date(train_df$timestamp))), "\n")
+    
+    # Correlation check (verify alignment)
+    cor_val <- cor(train_df[[arduino_col]], train_df[[vaisala_col]], use = "complete.obs")
+    cat(sprintf("  Correlation (%s vs %s): %.3f\n", arduino_col, vaisala_col, cor_val))
+
+    rf_formula <- as.formula(paste0(
+      vaisala_col, " ~ ", arduino_col, " + humidity_perc_rh_arduino + temp_c_arduino"
+    ))
+
+    # Fit models (optimized for speed: skip RF for Ozone)
+    ss_tot   <- sum((test_df[[vaisala_col]] - mean(test_df[[vaisala_col]]))^2)
+    rf_preds <- NULL
+    
+    if (ss_tot > 0) {
+      if (param != "o3_ppb") {
+        rf_model <- ranger(
+          formula   = rf_formula,
+          data      = train_df,
+          importance = "impurity",
+          num.trees  = 500,
+          seed       = 42,
+          num.threads = parallel::detectCores() # Speed optimization
+        )
+        rf_preds <- predict(rf_model, data = test_df)$predictions
+        rf_r2 <- 1 - sum((test_df[[vaisala_col]] - rf_preds)^2) / ss_tot
+      } else {
+        rf_r2 <- NA_real_
+      }
+      
+      # LM (Always fit for Ozone and as fallback for PM)
+      lm_model <- lm(rf_formula, data = train_df)
+      lm_preds <- predict(lm_model, newdata = test_df)
+      lm_r2 <- 1 - sum((test_df[[vaisala_col]] - lm_preds)^2) / ss_tot
+    } else {
+      rf_r2 <- lm_r2 <- NA_real_
+    }
+    
+    # Selection logic (optimized for speed and user request)
+    if (param == "o3_ppm") {
+      best_model <- lm_model
+      test_r2 <- lm_r2
+      model_type <- "lm"
+      cat(sprintf("  Selection: Forced Linear Model for Ozone (Test R²: %.3f)\n", lm_r2))
+    } else {
+      # For PM: Keep Random Forest as the primary approach
+      # Use RF if R2 > 0. If RF is very poor (R2 < 0) but LM is better, use LM.
+      # Otherwise fallback to bias.
+      use_rf <- (!is.na(rf_r2) && rf_r2 >= 0)
+      use_lm <- (!use_rf && !is.na(lm_r2) && lm_r2 >= 0)
+      
+      if (use_rf) {
+        best_model <- rf_model
+        test_r2 <- rf_r2
+        model_type <- "rf"
+        cat(sprintf("  Selection: Using Random Forest (Test R²: %.3f)\n", rf_r2))
+      } else if (use_lm) {
+        best_model <- lm_model
+        test_r2 <- lm_r2
+        model_type <- "lm"
+        cat(sprintf("  Selection: Using Linear Model (Test R²: %.3f)\n", lm_r2))
+      } else {
+        # FALLBACK: Bias-correction (Mean of training Vaisala data)
+        bias_val <- mean(train_df[[vaisala_col]], na.rm = TRUE)
+        best_model <- list(bias_val = bias_val)
+        test_r2 <- 0 
+        model_type <- "bias_only"
+        cat(sprintf("  Selection: Falling back to BIAS-CORRECTION (Mean shift) due to poor performance (RF R²: %.3f, LM R²: %.3f)\n", 
+                    rf_r2, lm_r2))
+      }
+    }
+
+    # RMSE on test set
+    best_preds <- if(model_type == "rf") rf_preds else if(model_type == "lm") lm_preds else rep(best_model$bias_val, nrow(test_df))
+    rmse_val <- sqrt(mean((test_df[[vaisala_col]] - best_preds)^2))
+
+    # Variable importance
+    vi <- if(model_type == "rf") rf_model$variable.importance else NULL
+
+    general_models[[param]] <- list(
+      parameter  = param,
+      model      = best_model,
+      model_type = model_type,
+      bias_value = if(model_type == "bias_only") best_model$bias_val else NULL,
+      r_squared  = test_r2,
+      rmse       = rmse_val,
+      n_train    = n_train,
+      n_test     = nrow(test_df),
+      n_points   = nrow(model_data),
+      importance = vi,
+      equation   = paste0(toupper(model_type), " model: ", param,
+                          " ~ Arduino + RH + Temp | test R² = ", round(test_r2, 3))
+    )
+
+    cat(sprintf("\n=== General %s Calibration Model for %s ===\n", toupper(model_type), param))
+    cat("Test-set R²:", round(test_r2, 4), "\n")
+    cat("Test-set RMSE:", round(rmse_val, 2), "\n")
+    cat("Train / test rows:", n_train, "/", nrow(test_df), "\n")
+    if(!is.null(vi)) {
+      cat("Variable importance:\n")
+      print(round(vi, 2))
+    }
+    cat("\n")
+  }
+
+  return(general_models)
+}
+
+# Create models
+general_models <- create_general_calibration_models(all_data)
+```
+
+# Site-Specific Calibration Data Loading
+```{r}
+# Load site-specific calibration data from Cal_Stations directory
+# Each site has its own folder containing:
+#   - Site sensor data CSV file
+#   - VaisalaTable.csv (reference data)
+
+cal_stations_dir <- file.path(dirname(data_dir), "Cal_Stations")
+
+# Function to read CSV files (handles different formats)
+read_calibration_csv <- function(file_path, site_name) {
+  if(!file.exists(file_path)) {
+    cat("File does not exist:", basename(file_path), "\n")
+    return(NULL)
+  }
+  
+  # Try reading with different approaches
+  encodings <- c("UTF-8", "latin1", "ISO-8859-1", "windows-1252")
+  
+  for(enc in encodings) {
+    tryCatch({
+      # First, try reading without skip (in case it's a standard CSV)
+      data <- read.csv(file_path, header=TRUE, 
+                      fileEncoding=enc, stringsAsFactors=FALSE,
+                      check.names=FALSE, quote="\"", comment.char="",
+                      as.is=TRUE)
+      
+      if(nrow(data) > 0 && ncol(data) > 0) {
+        cat("Successfully loaded", basename(file_path), "with encoding:", enc, "\n")
+        cat("  Columns:", paste(colnames(data), collapse=", "), "\n")
+        cat("  Rows:", nrow(data), "\n")
+        return(data)
+      }
+    }, error = function(e) {
+      return(NULL)
+    })
+  }
+  
+  # Try with skip=3 (in case it has header rows like the .dat files)
+  for(enc in encodings) {
+    tryCatch({
+      data <- read.csv(file_path, header=TRUE, skip=3,
+                      fileEncoding=enc, stringsAsFactors=FALSE,
+                      check.names=FALSE, quote="\"", comment.char="",
+                      as.is=TRUE)
+      
+      if(nrow(data) > 0 && ncol(data) > 0) {
+        cat("Successfully loaded", basename(file_path), "with encoding:", enc, "(skip=3)\n")
+        cat("  Columns:", paste(colnames(data), collapse=", "), "\n")
+        cat("  Rows:", nrow(data), "\n")
+        return(data)
+      }
+    }, error = function(e) {
+      return(NULL)
+    })
+  }
+  
+  cat("Failed to load", basename(file_path), "\n")
+  return(NULL)
+}
+
+# Scan Cal_Stations directory for site folders
+site_calibration_data <- list()
+
+if(dir.exists(cal_stations_dir)) {
+  cat("Scanning Cal_Stations directory for site-specific calibration data...\n")
+  
+  # Get all subdirectories (site folders)
+  site_folders <- list.dirs(cal_stations_dir, full.names = TRUE, recursive = FALSE)
+  
+  cat("Found", length(site_folders), "site folder(s)\n\n")
+  
+  for(site_folder in site_folders) {
+    site_name <- basename(site_folder)
+    cat("Processing site:", site_name, "\n")
+    
+    # Find files in this folder
+    files_in_folder <- list.files(site_folder, full.names = TRUE)
+    
+    # Look for Vaisala file and site sensor file
+    vaisala_file <- NULL
+    sensor_file <- NULL
+    
+    for(f in files_in_folder) {
+      f_basename <- basename(f)
+      if(tolower(f_basename) == "vaisalatable.csv") {
+        vaisala_file <- f
+      } else if(grepl("\\.csv$", f_basename, ignore.case = TRUE)) {
+        # This should be the site sensor data file
+        sensor_file <- f
+      }
+    }
+    
+    if(is.null(vaisala_file)) {
+      cat("  Warning: No VaisalaTable.csv found in", site_name, "\n")
+      next
+    }
+    
+    if(is.null(sensor_file)) {
+      cat("  Warning: No sensor data CSV found in", site_name, "\n")
+      next
+    }
+    
+    # Load both files
+    cat("  Loading Vaisala data:", basename(vaisala_file), "\n")
+    vaisala_data <- read_calibration_csv(vaisala_file, paste0(site_name, "_Vaisala"))
+    
+    cat("  Loading sensor data:", basename(sensor_file), "\n")
+    sensor_data <- read_calibration_csv(sensor_file, site_name)
+    
+    if(!is.null(vaisala_data) && !is.null(sensor_data)) {
+      site_calibration_data[[site_name]] <- list(
+        site_name = site_name,
+        vaisala_data = vaisala_data,
+        sensor_data = sensor_data
+      )
+      cat("  Successfully loaded data for", site_name, "\n")
+    } else {
+      cat("  Failed to load complete data for", site_name, "\n")
+    }
+    cat("\n")
+  }
+  
+  cat("Summary: Loaded calibration data for", length(site_calibration_data), "site(s)\n")
+  cat("Sites:", paste(names(site_calibration_data), collapse = ", "), "\n\n")
+} else {
+  cat("Cal_Stations directory not found:", cal_stations_dir, "\n")
+  cat("Falling back to old file locations...\n")
+  
+  # Fallback to old file locations for backward compatibility
+  vaisala_new_file <- file.path(data_dir, "VaisalaTable.csv")
+  strength2love_file <- file.path(data_dir, "Strength2LoveFarm_SERCCal.csv")
+  baybrook_file <- file.path(data_dir, "BayBrookElementary_SERCCal.csv")
+  
+  if(file.exists(vaisala_new_file) && file.exists(strength2love_file)) {
+    vaisala_data <- read_calibration_csv(vaisala_new_file, "Vaisala_New")
+    sensor_data <- read_calibration_csv(strength2love_file, "Strength2LoveFarm")
+    if(!is.null(vaisala_data) && !is.null(sensor_data)) {
+      site_calibration_data[["Strength2LoveFarm"]] <- list(
+        site_name = "Strength2LoveFarm",
+        vaisala_data = vaisala_data,
+        sensor_data = sensor_data
+      )
+    }
+  }
+  
+  if(file.exists(vaisala_new_file) && file.exists(baybrook_file)) {
+    vaisala_data <- read_calibration_csv(vaisala_new_file, "Vaisala_New")
+    sensor_data <- read_calibration_csv(baybrook_file, "BayBrookElementary")
+    if(!is.null(vaisala_data) && !is.null(sensor_data)) {
+      site_calibration_data[["BayBrookElementary"]] <- list(
+        site_name = "BayBrookElementary",
+        vaisala_data = vaisala_data,
+        sensor_data = sensor_data
+      )
+    }
+  }
+}
+```
+
+# Site-Specific Data Processing
+```{r}
+# Function to standardize column names and extract relevant measurements
+standardize_sensor_data <- function(data, site_name) {
+  if(is.null(data) || nrow(data) == 0) {
+    return(NULL)
+  }
+  
+  # Convert column names to lowercase for easier matching
+  colnames_lower <- tolower(colnames(data))
+  data_cols <- colnames(data)
+  
+  # Helper: find a column by exact name match (case-insensitive), returns first match
+  find_column <- function(candidates) {
+    for(name in candidates) {
+      idx <- which(colnames_lower == tolower(name))
+      if(length(idx) > 0) return(data_cols[idx[1]])
+    }
+    return(NULL)
+  }
+  
+  # Find timestamp column
+  timestamp_col <- find_column(c("TIMESTAMP", "timestamp", "datetime", "date", "time", "date_time"))
+  
+  if(is.null(timestamp_col)) {
+    cat("Warning: Could not find timestamp column in", site_name, "\n")
+    cat("Available columns:", paste(colnames(data), collapse=", "), "\n")
+    return(NULL)
+  }
+  
+  # Extract and convert timestamp
+  result <- data.frame(timestamp = data[[timestamp_col]], stringsAsFactors = FALSE)
+  
+  # Parse timestamps — convert incoming ET/EST to UTC
+  result$timestamp <- parse_to_utc(result$timestamp)
+  
+  # --- Column matching ---
+  # Uses exact name matching (case-insensitive) with explicit candidate lists.
+  # Arduino data logger naming convention:
+  #   ard_pm10_1  = PM1.0  (1.0 μm × 10 = 10)  sensor 1
+  #   ard_pm25_1  = PM2.5  (2.5 μm × 10 = 25)  sensor 1
+  #   ard_pm100_1 = PM10   (10  μm × 10 = 100) sensor 1
+  # Some units use ard2_ prefix instead of ard_.
+  
+  # O3
+  o3_col <- find_column(c(
+    "O3", "o3_ppb", "ozone_ppb", "ozone",
+    "ard_o3", "ard2_o3",                    # Cal_Stations Arduino names
+    "ard_o3_ppb"                             # renamed general calibration name
+  ))
+  
+  # PM1.0  (note: ard_pm10_1 = PM1.0, NOT PM10)
+  pm1_col <- find_column(c(
+    "PM1", "pm1_ugm3",
+    "ard_pm10_1", "ard2_pm10_1",            # Cal_Stations Arduino names (PM1.0)
+    "ard_pm1_1_ugm3"                         # renamed general calibration name
+  ))
+  
+  # PM2.5
+  pm25_col <- find_column(c(
+    "PM2_5", "pm25_ugm3", "pm2.5",
+    "ard_pm25_1", "ard2_pm25_1",            # Cal_Stations Arduino names
+    "ard_pm25_1_ugm3"                        # renamed general calibration name
+  ))
+  
+  # PM10  (note: ard_pm100_1 = PM10, NOT PM100)
+  pm10_col <- find_column(c(
+    "PM10", "pm10_ugm3",
+    "ard_pm100_1", "ard2_pm100_1",          # Cal_Stations Arduino names (PM10)
+    "ard_pm10_1_ugm3"                        # renamed general calibration name
+  ))
+  
+  # Temperature
+  temp_col <- find_column(c(
+    "air_temp",                              # Vaisala
+    "ard_temp", "ard2_temp",                 # Cal_Stations Arduino names
+    "ard_temp_c",                            # renamed general calibration name
+    "temp_c", "temperature", "bme_temp"
+  ))
+  
+  # Humidity
+  humidity_col <- find_column(c(
+    "humidity",                              # Vaisala
+    "ard_rh", "ard2_rh",                    # Cal_Stations Arduino names
+    "ard_humidity_perc_rh",                  # renamed general calibration name
+    "humidity_perc_rh", "rh", "bme_humidity"
+  ))
+  
+  # Extract measurements
+  if(!is.null(o3_col)) result$o3_ppm <- as.numeric(data[[o3_col]]) / 1000
+  if(!is.null(pm1_col)) result$pm1_ugm3 <- as.numeric(data[[pm1_col]])
+  if(!is.null(pm25_col)) result$pm25_ugm3 <- as.numeric(data[[pm25_col]])
+  if(!is.null(pm10_col)) result$pm10_ugm3 <- as.numeric(data[[pm10_col]])
+  if(!is.null(temp_col)) result$temp_c <- as.numeric(data[[temp_col]])
+  if(!is.null(humidity_col)) result$humidity_perc_rh <- as.numeric(data[[humidity_col]])
+  
+  result$site <- site_name
+  
+  cat("\nStandardized data for", site_name, ":\n")
+  cat("  Timestamp column:", timestamp_col, "\n")
+  cat("  O3 column:", ifelse(is.null(o3_col), "NOT FOUND", o3_col), "\n")
+  cat("  PM1 column:", ifelse(is.null(pm1_col), "NOT FOUND", pm1_col), "\n")
+  cat("  PM2.5 column:", ifelse(is.null(pm25_col), "NOT FOUND", pm25_col), "\n")
+  cat("  PM10 column:", ifelse(is.null(pm10_col), "NOT FOUND", pm10_col), "\n")
+  cat("  Temp column:", ifelse(is.null(temp_col), "NOT FOUND", temp_col), "\n")
+  cat("  Humidity column:", ifelse(is.null(humidity_col), "NOT FOUND", humidity_col), "\n")
+  cat("  Rows:", nrow(result), "\n")
+  
+  return(result)
+}
+
+# Standardize all site-specific data files
+site_calibration_std <- list()
+
+for(site_name in names(site_calibration_data)) {
+  site_info <- site_calibration_data[[site_name]]
+  
+  cat("\nStandardizing data for", site_name, "...\n")
+  
+  # Standardize sensor data
+  sensor_std <- standardize_sensor_data(site_info$sensor_data, site_name)
+  
+  # Standardize Vaisala data
+  vaisala_std <- standardize_sensor_data(site_info$vaisala_data, paste0(site_name, "_Vaisala"))
+  
+  if(!is.null(sensor_std) && !is.null(vaisala_std)) {
+    site_calibration_std[[site_name]] <- list(
+      site_name = site_name,
+      sensor_data = sensor_std,
+      vaisala_data = vaisala_std
+    )
+    cat("Successfully standardized data for", site_name, "\n")
+  } else {
+    cat("Failed to standardize data for", site_name, "\n")
+  }
+}
+
+cat("\nSummary: Standardized data for", length(site_calibration_std), "site(s)\n")
+cat("Sites:", paste(names(site_calibration_std), collapse = ", "), "\n")
+```
+
+# Site-Specific Calibration Model Creation
+```{r site-specific-models}
+# Creates a random-forest calibration model for a specific site.
+# Predictors: sensor reading + temperature + relative humidity
+# 80/20 temporal train/test split; reports test-set R² and variable importance.
+# Also stores combined_data (hourly colocation) for the second-stage linear correction.
+create_site_calibration_models <- function(sensor_data, vaisala_data, site_name) {
+  if(is.null(sensor_data) || is.null(vaisala_data)) {
+    cat("Missing data for", site_name, "\n")
+    return(NULL)
+  }
+
+  # Ensure timestamps are POSIXct in UTC
+  sensor_data$timestamp <- parse_to_utc(sensor_data$timestamp)
+  vaisala_data$timestamp <- parse_to_utc(vaisala_data$timestamp)
+
+  # Round timestamps to nearest hour for matching
+  sensor_data$timestamp_hour <- round(sensor_data$timestamp, units = "hours")
+  vaisala_data$timestamp_hour <- round(vaisala_data$timestamp, units = "hours")
+
+  # Determine which measurement columns are available
+  all_measure_cols <- c("o3_ppm", "pm1_ugm3", "pm25_ugm3", "pm10_ugm3", "temp_c", "humidity_perc_rh")
+  sensor_measure_cols <- intersect(all_measure_cols, colnames(sensor_data))
+  vaisala_measure_cols <- intersect(all_measure_cols, colnames(vaisala_data))
+
+  cat("  Sensor columns available:", paste(sensor_measure_cols, collapse = ", "), "\n")
+  cat("  Vaisala columns available:", paste(vaisala_measure_cols, collapse = ", "), "\n")
+
+  if(length(sensor_measure_cols) == 0 || length(vaisala_measure_cols) == 0) {
+    cat("No overlapping measurement columns for", site_name, "\n")
+    return(NULL)
+  }
+
+  # Aggregate to hourly means
+  sensor_hourly <- sensor_data %>%
+    group_by(timestamp_hour) %>%
+    summarise(across(all_of(sensor_measure_cols), ~mean(.x, na.rm = TRUE)), .groups = 'drop')
+
+  vaisala_hourly <- vaisala_data %>%
+    group_by(timestamp_hour) %>%
+    summarise(across(all_of(vaisala_measure_cols), ~mean(.x, na.rm = TRUE)), .groups = 'drop')
+
+  # Merge by timestamp
+  combined_data <- inner_join(
+    sensor_hourly,
+    vaisala_hourly,
+    by = "timestamp_hour",
+    suffix = c("_sensor", "_vaisala")
+  )
+
+  n_matched <- nrow(combined_data)
+
+  # --- Step 2: 72-hour warning ---
+  if(site_name %in% calibrated_sensors && n_matched < 72) {
+    warning(sprintf(
+      "Calibrated sensor '%s' has only %d hourly observations in its colocation period (< 72 recommended). Site-specific correction may be unreliable.",
+      site_name, n_matched
+    ))
+  }
+
+  if(n_matched < min_hours_for_calibration) {
+    cat("Insufficient overlapping data for", site_name,
+        "(", n_matched, "hourly points; need", min_hours_for_calibration, ")\n")
+    return(NULL)
+  }
+
+  cat("\n=== Creating RF calibration models for", site_name, "===\n")
+  cat("Matched", n_matched, "hourly data points\n")
+
+  # Model Rationale: 
+  # - Ozone: Forced MLR is used to handle low-variance "flat signals."
+  # - PM: Random Forest captures non-linear RH/Temp interactions.
+  # - Efficiency: Multi-core processing enabled; redundant fits skipped.
+  
+  target_params <- c("o3_ppm", "pm1_ugm3", "pm25_ugm3", "pm10_ugm3")
+  models <- list()
+
+  for(param in target_params) {
+    sensor_col    <- paste0(param, "_sensor")
+    vaisala_col   <- paste0(param, "_vaisala")
+
+    if(!(sensor_col %in% colnames(combined_data)) ||
+       !(vaisala_col %in% colnames(combined_data))) {
+      cat("Missing columns for", param, "\n")
+      next
+    }
+
+    has_env <- "temp_c_sensor" %in% colnames(combined_data) &&
+               "humidity_perc_rh_sensor" %in% colnames(combined_data)
+
+    filter_expr <- if(has_env) {
+      combined_data %>%
+        filter(!is.na(.data[[sensor_col]]), !is.na(.data[[vaisala_col]]),
+               is.finite(.data[[sensor_col]]), is.finite(.data[[vaisala_col]]),
+               !is.na(temp_c_sensor), !is.na(humidity_perc_rh_sensor),
+               is.finite(temp_c_sensor), is.finite(humidity_perc_rh_sensor))
+    } else {
+      combined_data %>%
+        filter(!is.na(.data[[sensor_col]]), !is.na(.data[[vaisala_col]]),
+               is.finite(.data[[sensor_col]]), is.finite(.data[[vaisala_col]]))
+    }
+    model_data <- filter_expr
+
+    if(nrow(model_data) < min_hours_for_calibration) next
+
+    # 80/20 random stratified split (replacing temporal split)
+    set.seed(42)
+    n_train <- floor(0.8 * nrow(model_data))
+    train_indices <- sample(seq_len(nrow(model_data)), n_train)
+    train_df <- model_data[train_indices, ]
+    test_df  <- model_data[-train_indices, ]
+
+    # --- Diagnostics (per user request) ---
+    cat(sprintf("\n--- Diagnostics for %s (%s) ---\n", param, site_name))
+    cat("  Training date range:", as.character(min(as.Date(train_df$timestamp_hour))), 
+        "to", as.character(max(as.Date(train_df$timestamp_hour))), "\n")
+    cat("  Unique dates in training:", length(unique(as.Date(train_df$timestamp_hour))), "\n")
+    
+    # Correlation check (verify alignment)
+    cor_val <- cor(train_df[[sensor_col]], train_df[[vaisala_col]], use = "complete.obs")
+    cat(sprintf("  Correlation (%s vs %s): %.3f\n", sensor_col, vaisala_col, cor_val))
+
+    # Build predictor data frames
+    if(has_env) {
+      rf_formula <- as.formula(paste0(
+        vaisala_col, " ~ ", sensor_col, " + temp_c_sensor + humidity_perc_rh_sensor"
+      ))
+    } else {
+      rf_formula <- as.formula(paste0(vaisala_col, " ~ ", sensor_col))
+    }
+
+    # Fit models (optimized for speed: skip RF for Ozone)
+    ss_tot <- sum((test_df[[vaisala_col]] - mean(test_df[[vaisala_col]]))^2)
+    rf_preds <- NULL
+    
+    if (ss_tot > 0) {
+    if (param != "o3_ppm") {
+        rf_model <- ranger(
+          formula    = rf_formula,
+          data       = train_df,
+          importance = "impurity",
+          num.trees  = 500,
+          seed       = 42,
+          num.threads = parallel::detectCores() # Speed optimization
+        )
+        rf_preds <- predict(rf_model, data = test_df)$predictions
+        rf_r2 <- 1 - sum((test_df[[vaisala_col]] - rf_preds)^2) / ss_tot
+      } else {
+        rf_r2 <- NA_real_
+      }
+      
+      # LM (Always fit for Ozone and as fallback for PM)
+      lm_model <- lm(rf_formula, data = train_df)
+      lm_preds <- predict(lm_model, newdata = test_df)
+      lm_r2 <- 1 - sum((test_df[[vaisala_col]] - lm_preds)^2) / ss_tot
+    } else {
+      rf_r2 <- lm_r2 <- NA_real_
+    }
+    
+    # Selection logic (optimized for speed and user request)
+    if (param == "o3_ppm") {
+      best_model <- lm_model
+      test_r2 <- lm_r2
+      model_type <- "lm"
+      cat(sprintf("  Selection: Forced Linear Model for Ozone (Test R²: %.3f)\n", lm_r2))
+    } else {
+      # For PM: Keep Random Forest as the primary approach
+      use_rf <- (!is.na(rf_r2) && rf_r2 >= 0)
+      use_lm <- (!use_rf && !is.na(lm_r2) && lm_r2 >= 0)
+      
+      if (use_rf) {
+        best_model <- rf_model
+        test_r2 <- rf_r2
+        model_type <- "rf"
+        cat(sprintf("  Selection: Using Random Forest (Test R²: %.3f)\n", rf_r2))
+      } else if (use_lm) {
+        best_model <- lm_model
+        test_r2 <- lm_r2
+        model_type <- "lm"
+        cat(sprintf("  Selection: Using Linear Model (Test R²: %.3f)\n", lm_r2))
+      } else {
+        # FALLBACK: Bias-correction
+        bias_val <- mean(train_df[[vaisala_col]], na.rm = TRUE)
+        best_model <- list(bias_val = bias_val)
+        test_r2 <- 0 
+        model_type <- "bias_only"
+        cat(sprintf("  Selection: Falling back to BIAS-CORRECTION (Mean shift) due to poor performance (RF R²: %.3f, LM R²: %.3f)\n", 
+                    rf_r2, lm_r2))
+      }
+    }
+
+    # RMSE on test set
+    best_preds <- if(model_type == "rf") rf_preds else if(model_type == "lm") lm_preds else rep(best_model$bias_val, nrow(test_df))
+    rmse_val <- sqrt(mean((test_df[[vaisala_col]] - best_preds)^2))
+
+    # Variable importance
+    vi <- if(model_type == "rf") rf_model$variable.importance else NULL
+
+    models[[param]] <- list(
+      parameter   = param,
+      model       = best_model,
+      model_type  = model_type,
+      bias_value  = if(model_type == "bias_only") best_model$bias_val else NULL,
+      r_squared   = test_r2,          # test-set R²
+      rmse        = rmse_val,
+      n_train     = n_train,
+      n_test      = nrow(test_df),
+      n_points    = nrow(model_data),
+      importance  = vi,
+      site        = site_name,
+      train_start = min(train_df$timestamp_hour),
+      train_end   = max(train_df$timestamp_hour),
+      equation     = paste0(toupper(model_type), " model: ", param,
+                            " ~ sensor + temp + RH | test R² = ",
+                            round(test_r2, 3))
+    )
+
+    cat(sprintf("\n=== %s Calibration for %s (%s) ===\n", toupper(model_type), param, site_name))
+    cat("Test-set R²:", round(test_r2, 4), "\n")
+    cat("Test-set RMSE:", round(rmse_val, 2), "\n")
+    cat("Train / test rows:", n_train, "/", nrow(test_df), "\n")
+    if(!is.null(vi)) {
+      cat("Variable importance:\n")
+      print(round(vi, 2))
+    }
+  }
+
+  if(length(models) == 0) {
+    cat("No calibration models could be created for", site_name, "\n")
+    return(NULL)
+  }
+
+  return(list(models = models, combined_data = combined_data))
+}
+
+# Create calibration models for each site
+site_calibration_models <- list()
+
+for(site_name in names(site_calibration_std)) {
+  site_info <- site_calibration_std[[site_name]]
+
+  cat("\n=== Creating calibration models for", site_name, "===\n")
+
+  models_result <- create_site_calibration_models(
+    site_info$sensor_data,
+    site_info$vaisala_data,
+    site_name
+  )
+
+  if(!is.null(models_result) && length(models_result$models) > 0) {
+    site_calibration_models[[site_name]] <- models_result
+    cat("Successfully created models for", site_name,
+        "(", paste(names(models_result$models), collapse = ", "), ")\n")
+  } else {
+    cat("Failed to create models for", site_name, "\n")
+  }
+}
+
+cat("\nSummary: Created calibration models for", length(site_calibration_models), "site(s)\n")
+cat("Sites with models:", paste(names(site_calibration_models), collapse = ", "), "\n")
+```
+
+# Site-Specific Calibration Visualizations
+```{r site-viz, fig.width=10, fig.height=5}
+# Function to create calibration plots for each site
+create_site_calibration_plots <- function(models_result, site_name) {
+  if(is.null(models_result) || is.null(models_result$models)) {
+    cat("No models available for", site_name, "\n")
+    return(NULL)
+  }
+  
+  models <- models_result$models
+  combined_data <- models_result$combined_data
+  
+  if(is.null(combined_data) || nrow(combined_data) == 0) {
+    return(NULL)
+  }
+  
+  parameters <- list(
+    "o3_ppm" = "Ozone (ppm)",
+    "pm1_ugm3" = "PM1 (μg/m³)",
+    "pm25_ugm3" = "PM2.5 (μg/m³)",
+    "pm10_ugm3" = "PM10 (μg/m³)"
+  )
+  
+  for(param in names(parameters)) {
+    if(!param %in% names(models)) next
+    
+    param_label <- parameters[[param]]
+    sensor_col <- paste0(param, "_sensor")
+    vaisala_col <- paste0(param, "_vaisala")
+    
+    if(!(sensor_col %in% colnames(combined_data)) || 
+       !(vaisala_col %in% colnames(combined_data))) next
+    
+    plot_data <- combined_data %>%
+      filter(
+        !is.na(.data[[sensor_col]]),
+        !is.na(.data[[vaisala_col]]),
+        is.finite(.data[[sensor_col]]),
+        is.finite(.data[[vaisala_col]])
+      )
+    
+    if(nrow(plot_data) < 3) next
+    
+    model_info <- models[[param]]
+    
+    # Scatter plot with regression line
+    p1 <- ggplot(plot_data, aes(x = .data[[sensor_col]], y = .data[[vaisala_col]])) +
+      geom_point(alpha = 0.6, color = "steelblue") +
+      geom_smooth(method = "lm", se = TRUE, color = "red", linetype = "dashed") +
+      geom_abline(intercept = 0, slope = 1, color = "gray", linetype = "dotted") +
+      labs(
+        title = paste(site_name, "-", param_label, "Calibration"),
+        subtitle = paste0("R² = ", round(model_info$r_squared, 3), 
+                          ", RMSE = ", round(model_info$rmse, 2)),
+        x = paste("Sensor", param_label),
+        y = paste("Vaisala Reference", param_label)
+      ) +
+      theme_minimal()
+    
+    print(p1)
+    
+    # Time series comparison
+    p2 <- ggplot(plot_data, aes(x = timestamp_hour)) +
+      geom_line(aes(y = .data[[sensor_col]], color = "Sensor"), alpha = 0.7) +
+      geom_line(aes(y = .data[[vaisala_col]], color = "Vaisala Reference"), alpha = 0.7) +
+      labs(
+        title = paste(site_name, "-", param_label, "Time Series"),
+        x = "Timestamp",
+        y = param_label,
+        color = "Source"
+      ) +
+      theme_minimal() +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+      scale_color_manual(values = c("Sensor" = "blue", "Vaisala Reference" = "green"))
+    
+    print(p2)
+  }
+}
+
+# Create plots for each site
+for(site_name in names(site_calibration_models)) {
+  cat("\n=== Creating plots for", site_name, "===\n")
+  create_site_calibration_plots(site_calibration_models[[site_name]], site_name)
+}
+```
+
+# Site-Specific Calibration Summary
+```{r site-summary}
+# Print summary of all calibration equations
+cat("\n\n")
+cat(paste0(rep("=", 80), collapse=""), "\n")
+cat("SITE-SPECIFIC CALIBRATION EQUATIONS SUMMARY\n")
+cat(paste0(rep("=", 80), collapse=""), "\n\n")
+
+for(site_name in names(site_calibration_models)) {
+  models_result <- site_calibration_models[[site_name]]
+  
+  if(!is.null(models_result) && !is.null(models_result$models)) {
+    cat(toupper(site_name), "CALIBRATION EQUATIONS:\n")
+    cat(paste0(rep("-", 80), collapse=""), "\n")
+    
+    for(param in names(models_result$models)) {
+      model_info <- models_result$models[[param]]
+      cat("\n", toupper(param), ":\n")
+      cat("  ", model_info$equation, "\n")
+      cat("  R² =", round(model_info$r_squared, 4), 
+          ", RMSE =", round(model_info$rmse, 2),
+          ", N =", model_info$n_points, "\n")
+    }
+    cat("\n")
+  }
+}
+
+cat(paste0(rep("=", 80), collapse=""), "\n\n")
+```
+
+# -------------------------------------------------------------------------
+# CALIBRATION DEPLOYMENT SUMMARY
+# -------------------------------------------------------------------------
+```{r deployment-summary}
+# Summary table of applied models and date ranges.
+sites_with_calibration <- names(site_calibration_models)
+
+# Create a detailed deployment summary table
+deployment_rows <- list()
+
+# Detailed descriptions for General Stage 1
+gen_types <- paste(sapply(names(general_models), function(p) {
+  paste0(toupper(p), ": ", toupper(general_models[[p]]$model_type))
+}), collapse = " | ")
+
+gen_eqs <- paste(sapply(names(general_models), function(p) {
+  m <- general_models[[p]]
+  if(m$model_type == "lm") {
+    co <- coef(m$model)
+    sprintf("%s: %.2f + %.2f*x", toupper(p), co[1], co[2])
+  } else {
+    paste0(toupper(p), ": R²=", round(m$r_squared, 2))
+  }
+}), collapse = " | ")
+
+for(site in sites_with_calibration) {
+  # Get a representative model to check the training range
+  site_models <- site_calibration_models[[site]]$models
+  rep_model <- site_models[[1]]
+  
+  # Before cutoff
+  deployment_rows[[length(deployment_rows) + 1]] <- data.frame(
+    Site = site,
+    Application_Period = paste0("Before ", calibration_cutoff_date),
+    Applied_Model = "General Stage 1",
+    Model_Type = gen_types,
+    Equations = gen_eqs,
+    Basis = "Lab co-location",
+    stringsAsFactors = FALSE
+  )
+  
+  # After cutoff: Site-specific details
+  site_types <- paste(sapply(site_models, function(m) {
+    paste0(toupper(m$parameter), ": ", toupper(m$model_type))
+  }), collapse = " | ")
+  
+  site_eqs <- paste(sapply(site_models, function(m) {
+    if(m$model_type == "lm") {
+      co <- coef(m$model)
+      sprintf("%s: %.2f + %.2f*x", toupper(m$parameter), co[1], co[2])
+    } else {
+      paste0(toupper(m$parameter), ": R²=", round(m$r_squared, 2))
+    }
+  }), collapse = " | ")
+  
+  deployment_rows[[length(deployment_rows) + 1]] <- data.frame(
+    Site = site,
+    Application_Period = paste0("On/After ", calibration_cutoff_date),
+    Applied_Model = "Site-Specific Stage 2",
+    Model_Type = site_types,
+    Equations = site_eqs,
+    Basis = sprintf("Field co-location (%s to %s)", 
+                    as.Date(rep_model$train_start), 
+                    as.Date(rep_model$train_end)),
+    stringsAsFactors = FALSE
+  )
+}
+
+# Add default for other sites
+deployment_rows[[length(deployment_rows) + 1]] <- data.frame(
+  Site = "All Other Sites",
+  Application_Period = "All Dates",
+  Applied_Model = "General Stage 1",
+  Model_Type = gen_types,
+  Equations = gen_eqs,
+  Basis = "Lab co-location",
+  stringsAsFactors = FALSE
+)
+
+calibration_deployment_summary <- bind_rows(deployment_rows)
+
+cat("\n")
+cat(paste0(rep("=", 80), collapse=""), "\n")
+cat("DETAILED CALIBRATION DEPLOYMENT BY SITE AND DATE\n")
+cat(paste0(rep("=", 80), collapse=""), "\n\n")
+print(calibration_deployment_summary)
+cat("\n")
+cat(paste0(rep("=", 80), collapse=""), "\n\n")
+```
+
+# Calibration Usage Guide
+```{r}
+# Note: calibration_cutoff_date is defined in the previous section
+
+cat("\n")
+cat(paste0(rep("=", 80), collapse=""), "\n")
+cat("CALIBRATION EQUATIONS USAGE GUIDE\n")
+cat(paste0(rep("=", 80), collapse=""), "\n\n")
+cat("IMPORTANT: Date-based calibration selection\n")
+cat("  Calibration cutoff date:", as.character(calibration_cutoff_date), "\n\n")
+
+if(length(sites_with_calibration) > 0) {
+  cat("SITE-SPECIFIC CALIBRATIONS:\n")
+  cat("  Sites with site-specific calibrations:", 
+      paste(sites_with_calibration, collapse = ", "), "\n")
+  cat("  - ONLY use for data collected ON OR AFTER", as.character(calibration_cutoff_date), "\n")
+  cat("  - These calibrations are based on co-located Vaisala data\n")
+  cat("  - For data BEFORE", as.character(calibration_cutoff_date), ", use GENERAL calibration\n\n")
+} else {
+  cat("SITE-SPECIFIC CALIBRATIONS:\n")
+  cat("  No site-specific calibrations available.\n\n")
+}
+
+cat("GENERAL CALIBRATION (All sites):\n")
+cat("  - Use for ALL data collected BEFORE", as.character(calibration_cutoff_date), "\n")
+if(length(sites_with_calibration) > 0) {
+  cat("  - Use for sites without site-specific calibration at ALL times\n")
+  cat("  - Use for", paste(sites_with_calibration, collapse = ", "), 
+      "BEFORE", as.character(calibration_cutoff_date), "\n")
+}
+cat("  - Based on the original Arduino vs Vaisala comparison\n\n")
+
+cat("When applying corrections:\n")
+cat("  1. Check the date of the measurement\n")
+if(length(sites_with_calibration) > 0) {
+  cat("  2. If date >= ", as.character(calibration_cutoff_date), 
+      " AND site is one of:", paste(sites_with_calibration, collapse = ", "), "\n")
+  cat("     -> Use site-specific calibration\n")
+  cat("  3. Otherwise:\n")
+} else {
+  cat("  2. Always:\n")
+}
+cat("     -> Use general calibration\n")
+cat(paste0(rep("=", 80), collapse=""), "\n\n")
+```
+
+# -------------------------------------------------------------------------
+# CALIBRATION APPLICATION (PRODUCTION)
+# -------------------------------------------------------------------------
+# Stage 1: General RF/MLR (All sensors, all dates)
+# Stage 2: Site-Specific Linear Refinement (Calibrated sites, date >= cutoff)
+# -------------------------------------------------------------------------
+```{r apply-calibration}
+apply_calibration_by_site <- function(sensor_data, site_name,
+                                     general_models = NULL,
+                                     site_calibration_models = NULL,
+                                     colocation_data_list = NULL,
+                                     timestamp_col = "timestamp") {
+  if(is.null(sensor_data) || nrow(sensor_data) == 0) {
+    cat("No sensor data provided for", site_name, "\n")
+    return(NULL)
+  }
+
+  if(!timestamp_col %in% colnames(sensor_data)) {
+    cat("Timestamp column", timestamp_col, "not found in data\n")
+    return(NULL)
+  }
+
+  sensor_data$date <- as.Date(sensor_data[[timestamp_col]])
+
+  # ── Stage 1: Apply general RF to ALL rows ──────────────────────────────
+  corrected_data <- apply_rf_calibration(sensor_data, general_models, site_name)
+  if(is.null(corrected_data)) corrected_data <- sensor_data
+
+  # Set default method for every row
+  corrected_data$correction_method <- "rf_general"
+
+  # ── Stage 2: Site-specific linear correction (calibrated sensors only) ──
+  # Only for sensors in calibrated_sensors AND date >= calibration_cutoff_date
+  is_calibrated <- site_name %in% calibrated_sensors
+
+  if(is_calibrated) {
+    # Find colocation data for this site
+    cal_data <- NULL
+    if(!is.null(colocation_data_list) && site_name %in% names(colocation_data_list)) {
+      cal_data <- colocation_data_list[[site_name]]
+    } else if(!is.null(site_calibration_models) && site_name %in% names(site_calibration_models)) {
+      cal_data <- site_calibration_models[[site_name]]$combined_data
+    }
+
+    post_rows <- corrected_data$date >= calibration_cutoff_date
+
+    if(any(post_rows) && !is.null(cal_data)) {
+      cat("\n  Stage 2: fitting site-specific linear correction for", site_name, "\n")
+      target_params <- c("o3_ppb", "pm1_ugm3", "pm25_ugm3", "pm10_ugm3")
+
+      for(param in target_params) {
+        rf_col  <- paste0("corrected_", param)      # RF stage-1 corrected
+        lab_col <- paste0(param, "_vaisala")         # lab (Vaisala) reference
+
+        if(!(rf_col %in% colnames(corrected_data))) {
+          cat("    No RF-corrected column for", param, "— skipping\n")
+          next
+        }
+
+        # Build calibration data: need rf_col in corrected form for colocation period
+        # Re-run stage-1 RF on the colocation data to get RF-corrected values there
+        col_rf <- NULL
+        if(!is.null(general_models) && param %in% names(general_models)) {
+          # colocation sensor column
+          sensor_param_col <- paste0(param, "_sensor")
+          if(sensor_param_col %in% colnames(cal_data)) {
+            pred_df <- build_rf_pred_df(cal_data, param, type = "site")
+            if(!is.null(pred_df)) {
+              # General model expects _arduino names even when applying to site data
+              colnames(pred_df) <- c(paste0(param, "_arduino"), 
+                                     "humidity_perc_rh_arduino", 
+                                     "temp_c_arduino")
+              # Use helper to apply General Model
+              col_rf <- predict_best_model(general_models[[param]], pred_df)
+            }
+          } else {
+            # fall back: try the arduino-style naming used in all_data
+            arduino_col <- paste0(param, "_arduino")
+            if(arduino_col %in% colnames(cal_data)) {
+              pred_df <- build_rf_pred_df(cal_data, param, type = "arduino")
+              if(!is.null(pred_df)) {
+                # Use helper to apply General Model
+                col_rf <- predict_best_model(general_models[[param]], pred_df)
+              }
+            }
+          }
+        }
+
+        if(is.null(col_rf) || !(lab_col %in% colnames(cal_data))) {
+          cat("    Cannot build stage-2 data for", param, "— skipping\n")
+          next
+        }
+
+        stage2_df <- data.frame(
+          lab = as.numeric(cal_data[[lab_col]]),
+          rf  = as.numeric(col_rf)
+        ) %>% filter(!is.na(lab), !is.na(rf), is.finite(lab), is.finite(rf))
+
+        if(nrow(stage2_df) < 3) {
+          cat("    Too few colocation points for stage-2 fit of", param, "\n")
+          next
+        }
+
+        stage2_model <- lm(lab ~ rf, data = stage2_df)
+        stage2_r2    <- summary(stage2_model)$r.squared
+        rf_r2        <- if(param %in% names(general_models)) general_models[[param]]$r_squared else NA_real_
+
+        cat(sprintf("    %s  |  General RF R²: %.3f  |  Site-specific R²: %.3f\n",
+                    param, rf_r2, stage2_r2))
+
+        if(!is.na(rf_r2) && stage2_r2 <= rf_r2) {
+          warning(sprintf(
+            "⚠ Site-specific correction for %s [%s] does NOT improve on general RF (site-specific R²=%.3f ≤ general RF R²=%.3f). Recommend using rf_general instead.",
+            site_name, param, stage2_r2, rf_r2
+          ))
+        }
+
+        # Apply stage-2 to post-cutoff rows
+        rf_vals_post <- corrected_data[[rf_col]][post_rows]
+        corrected_data[[rf_col]][post_rows] <- coef(stage2_model)[1] +
+                                               coef(stage2_model)[2] * rf_vals_post
+        corrected_data$correction_method[post_rows] <- "rf_sitespecific"
+      }
+    } else if(any(post_rows) && is.null(cal_data)) {
+      cat("  Warning: no colocation data found for", site_name, "— stage 2 skipped\n")
+    }
+  }
+
+  cat("\nApplied calibration to", site_name,
+      "(rf_general:", sum(!post_rows | !is_calibrated, na.rm=TRUE),
+      "rows, rf_sitespecific:", sum(corrected_data$correction_method == "rf_sitespecific"), "rows)\n")
+
+  corrected_data$date <- NULL
+  return(corrected_data)
+}
+
+# ── Helper: apply the general RF model to a data frame ───────────────────
+apply_rf_calibration <- function(sensor_data, general_models, site_name) {
+  if(is.null(general_models) || length(general_models) == 0) {
+    cat("  No general RF models available for", site_name, "\n")
+    return(sensor_data)
+  }
+  corrected_data <- sensor_data
+  target_params <- c("o3_ppb", "pm1_ugm3", "pm25_ugm3", "pm10_ugm3")
+
+  for(param in target_params) {
+    if(!param %in% names(general_models)) next
+
+    pred_df <- build_rf_pred_df(sensor_data, param, type = "arduino")
+    if(is.null(pred_df)) next
+
+    preds <- predict_best_model(general_models[[param]], pred_df)
+    corrected_data[[paste0("corrected_", param)]] <- preds
+  }
+  return(corrected_data)
+}
+
+# ── Helper: build a named predictor data frame for ranger ────────────────
+# type = "arduino" uses arduino-naming (_arduino suffix, temp_c_arduino, humidity_perc_rh_arduino)
+# type = "site"    uses site-naming    (_sensor suffix, temp_c_sensor,   humidity_perc_rh_sensor)
+build_rf_pred_df <- function(data, param, type = "arduino") {
+  if(type == "arduino") {
+    sensor_col   <- paste0(param, "_arduino")
+    temp_col     <- "temp_c_arduino"
+    humidity_col <- "humidity_perc_rh_arduino"
+  } else {
+    sensor_col   <- paste0(param, "_sensor")
+    temp_col     <- "temp_c_sensor"
+    humidity_col <- "humidity_perc_rh_sensor"
+  }
+
+  if(!sensor_col %in% colnames(data)) return(NULL)
+
+  # For the new models (MLR for Ozone, RF with Env for PM), 
+  # RH and Temp are required predictors.
+  if(temp_col %in% colnames(data) && humidity_col %in% colnames(data)) {
+    df <- data.frame(
+      x    = as.numeric(data[[sensor_col]]),
+      temp = as.numeric(data[[temp_col]]),
+      rh   = as.numeric(data[[humidity_col]])
+    )
+    colnames(df) <- c(sensor_col, temp_col, humidity_col)
+    return(df)
+  } else {
+    # If missing, we can't apply the new models correctly.
+    # Return a basic DF but warn or handle in calling function.
+    # Given the requirement, we should ideally have them.
+    cat(sprintf("  Warning: Missing environmental columns (%s/ %s) for %s prediction\n", 
+                temp_col, humidity_col, param))
+    df <- data.frame(x = as.numeric(data[[sensor_col]]))
+    colnames(df) <- sensor_col
+    return(df)
+  }
+}
+
+# Example usage (uncomment and modify as needed):
+# corrected_site_data <- apply_calibration_by_site(
+#   site_sensor_data,
+#   "SiteName",
+#   general_models = general_models,
+#   site_calibration_models = site_calibration_models,
+#   colocation_data_list = NULL,   # or supply named list of colocation data frames
+#   timestamp_col = "timestamp"
+# )
+```
+
+
+# Print summary
+```{r model-export}
+if(!is.null(general_models) && length(general_models) > 0) {
+  cat("\n\n")
+  cat(paste0(rep("=", 80), collapse=""), "\n")
+  cat("GENERAL RF CALIBRATION MODELS\n")
+  cat(paste0(rep("=", 80), collapse=""), "\n")
+  cat("Use these RF models for any site without site-specific calibration (Stage 1).\n\n")
+
+  for(param in names(general_models)) {
+    model_info <- general_models[[param]]
+    cat("\n", toupper(param), ":\n")
+    cat("  ", model_info$equation, "\n")
+    cat("  Test R² =", round(model_info$r_squared, 4),
+        ", Test RMSE =", round(model_info$rmse, 2),
+        ", N =", model_info$n_points, "\n")
+  }
+  cat("\n")
+  cat(paste0(rep("=", 80), collapse=""), "\n\n")
+}
+
+# Save unified model list for bmore_analysis_final.Rmd (General RF + Site-Specific Linear Refinement)
+# This RDS file now contains both the Stage 1 (RF) and Stage 2 (Linear) coefficients.
+if(!is.null(general_models) && length(general_models) > 0) {
+  cat("\n", paste0(rep("=", 80), collapse=""), "\n")
+  cat("PREPARING UNIFIED MODEL EXPORT FOR bmore_analysis_final.Rmd\n")
+  cat(paste0(rep("=", 80), collapse=""), "\n")
+
+  # 1. Prepare General RF Models (Stage 1)
+  general_export <- list()
+  for(param in names(general_models)) {
+    mi <- general_models[[param]]
+    param_name <- switch(param,
+      "ozone_ppb" = "o3_ppb",   # Standardize to sensor naming
+      "pm1_ugm3"  = "pm1_ugm3",
+      "pm25_ugm3" = "pm25_ugm3",
+      "pm10_ugm3" = "pm10_ugm3",
+      param
+    )
+
+    general_export[[param_name]] <- list(
+      model      = mi$model,        # renamed from ranger_model for simplicity
+      model_type = mi$model_type,
+      bias_value = mi$bias_value,
+      r_squared  = mi$r_squared,   # test-set R²
+      rmse       = mi$rmse,        # test-set RMSE
+      importance = mi$importance,  # variable importance
+      n_train    = mi$n_train,
+      n_test     = mi$n_test,
+      n_points   = mi$n_points
+    )
+    cat("  Included General RF model for", param_name, "\n")
+  }
+
+  # 2. Prepare Site-Specific Linear Refinements (Stage 2)
+  # For each site in calibrated_sensors, we pre-calculate the linear shift:
+  # lab_value ~ slope * general_rf_corrected + intercept
+  cat("\n  Calculating site-specific Stage 2 refinements (Lab ~ RF_General)...\n")
+  site_refinements <- list()
+  
+  if(exists("site_calibration_models") && length(site_calibration_models) > 0) {
+    for(site in names(site_calibration_models)) {
+      cal_data <- site_calibration_models[[site]]$combined_data
+      if(is.null(cal_data)) next
+      
+      site_refinements[[site]] <- list()
+      
+      for(param in names(general_models)) {
+        param_name <- switch(param, "o3_ppb"="ozone_ppb", "pm1_ugm3"="pm1_ugm3", 
+                            "pm25_ugm3"="pm25_ugm3", "pm10_ugm3"="pm10_ugm3", param)
+        lab_col <- paste0(param, "_vaisala")
+        
+        # Apply Stage 1 RF to the site's colocation data
+        # Check alignment of columns in cal_data
+        type_hint <- if(paste0(param, "_sensor") %in% names(cal_data)) "site" else "arduino"
+        pred_df <- build_rf_pred_df(cal_data, param, type = type_hint)
+        
+        if(!is.null(pred_df) && lab_col %in% names(cal_data)) {
+          # Apply General Model: MUST rename columns to match the general model's training names
+          # (Param_arduino, humidity_perc_rh_arduino, temp_c_arduino)
+          colnames(pred_df) <- c(paste0(param, "_arduino"), "humidity_perc_rh_arduino", "temp_c_arduino")
+          
+          # Use helper to apply Stage 1 (RF or LM)
+          rf_general_preds <- predict_best_model(general_models[[param]], pred_df)
+          
+          stage2_df <- data.frame(lab = as.numeric(cal_data[[lab_col]]), rf = as.numeric(rf_general_preds)) %>%
+            filter(!is.na(lab), !is.na(rf), is.finite(lab), is.finite(rf))
+          
+          if(nrow(stage2_df) >= 3) {
+            stage2_model <- lm(lab ~ rf, data = stage2_df)
+            
+            # Extract coefficients
+            s_int   <- as.numeric(coef(stage2_model)[1])
+            s_slope <- as.numeric(coef(stage2_model)[2])
+            
+            # Handle case where Stage 1 was constant (bias-only), leading to NA slope 
+            # We want to keep the intercept shift but have zero slope on the Stage 1 output
+            if(is.na(s_slope)) s_slope <- 0
+            if(is.na(s_int))   s_int   <- 0
+            
+            site_refinements[[site]][[param_name]] <- list(
+              intercept = s_int,
+              slope     = s_slope,
+              r2        = summary(stage2_model)$r.squared,
+              n_points  = nrow(stage2_df)
+            )
+            cat(sprintf("    %s [%s]: Stage 2 R² = %.3f (n=%d) | slope=%.3f, int=%.2f\n", 
+                        site, param_name, summary(stage2_model)$r.squared, 
+                        nrow(stage2_df), s_slope, s_int))
+          }
+        }
+      }
+    }
+  }
+
+  # 3. Save Unified RDS File
+  coefficients_file <- "general_correction_coefficients.rds"
+  export_list <- list(
+    general = general_export,
+    sites   = site_refinements,
+    version = "2.0 (Unified RF+Linear)",
+    export_date = Sys.Date()
+  )
+  saveRDS(export_list, file = coefficients_file)
+  
+  cat("\nUnified RF + Linear Refinement models saved to:", coefficients_file, "\n")
+  cat("This file now supports the full two-stage correction in bmore_analysis_final.Rmd.\n")
+  cat(paste0(rep("=", 80), collapse=""), "\n\n")
+}
+```
+
+# RF Diagnostics — Predicted vs. Observed on Test Set
+```{r rf-diagnostics, fig.width=6, fig.height=5}
+# Diagnostic plots: RF-predicted vs. Vaisala-observed on the held-out test set.
+# R² annotated on each plot so you can quickly judge model quality per pollutant.
+if(exists("general_models") && length(general_models) > 0) {
+  param_labels <- c(
+    o3_ppm    = "Ozone (ppm)",
+    pm1_ugm3  = "PM1 (μg/m³)",
+    pm25_ugm3 = "PM2.5 (μg/m³)",
+    pm10_ugm3 = "PM10 (μg/m³)"
+  )
+
+  for(param in names(general_models)) {
+    mi <- general_models[[param]]
+    arduino_col <- paste0(param, "_arduino")
+    vaisala_col <- paste0(param, "_vaisala")
+
+    # Reconstruct test set (must use SAME random seed and logic as training)
+    set.seed(42)
+    model_data <- all_data %>%
+      filter(
+        !is.na(.data[[arduino_col]]), !is.na(.data[[vaisala_col]]),
+        is.finite(.data[[arduino_col]]), is.finite(.data[[vaisala_col]]),
+        !is.na(temp_c_arduino), !is.na(humidity_perc_rh_arduino),
+        is.finite(temp_c_arduino), is.finite(humidity_perc_rh_arduino)
+      )
+    
+    n_train <- floor(0.8 * nrow(model_data))
+    train_indices <- sample(seq_len(nrow(model_data)), n_train)
+    test_df <- model_data[-train_indices, ]
+
+    if(nrow(test_df) < 3) next
+
+    pred_df <- build_rf_pred_df(test_df, param, type = "arduino")
+    if(is.null(pred_df)) next
+
+    # Predict using fallback-safe helper
+    test_preds <- predict_best_model(mi, pred_df)
+    r2_label   <- sprintf("R² = %.3f", mi$r_squared)
+
+    diag_df <- data.frame(
+      observed  = test_df[[vaisala_col]],
+      predicted = test_preds
+    )
+
+    p <- ggplot(diag_df, aes(x = observed, y = predicted)) +
+      geom_point(alpha = 0.5, colour = "steelblue", size = 1.5) +
+      geom_abline(slope = 1, intercept = 0, colour = "firebrick", linetype = "dashed") +
+      annotate("text", x = -Inf, y = Inf, label = r2_label,
+               hjust = -0.1, vjust = 1.5, size = 4.5, colour = "firebrick") +
+      labs(
+        title    = paste0("Calibration diagnostics: ", param_labels[param]),
+        subtitle = "Held-out test set (20%)",
+        x        = paste("Observed Vaisala", param_labels[param]),
+        y        = paste("Predicted", param_labels[param])
+      ) +
+      theme_minimal()
+
+    print(p)
+
+    # Variable importance bar chart (only for RF)
+    if(!is.null(mi$importance)) {
+      vi_df <- data.frame(
+        variable   = names(mi$importance),
+        importance = as.numeric(mi$importance)
+      ) %>% arrange(desc(importance))
+
+      p_vi <- ggplot(vi_df, aes(x = reorder(variable, importance), y = importance)) +
+        geom_col(fill = "steelblue") +
+        coord_flip() +
+        labs(
+          title = paste0("Variable importance: ", param),
+          x = NULL, y = "Impurity-based importance"
+        ) +
+        theme_minimal()
+
+      print(p_vi)
+    }
+  }
+} else {
+  cat("RF diagnostics: no general_models available yet.\n")
+}
+```
+
+# Apply Corrections
+```{r apply-corrections}
+# Applies the general RF calibration to sensor data.
+# Input: data frame with Arduino measurements + humidity + temp (all_data columns)
+# Output: same data frame with new "corrected_*" columns AND correction_method column.
+apply_general_calibration <- function(all_data, general_models) {
+  if(is.null(general_models) || length(general_models) == 0) {
+    cat("No general calibration models available for correction.\n")
+    return(all_data)
+  }
+
+  corrected_data <- all_data
+
+  for(param in names(general_models)) {
+    model_info  <- general_models[[param]]
+    corrected_col <- paste0("corrected_", param)
+
+    pred_data <- build_rf_pred_df(all_data, param, type = "arduino")
+    if(is.null(pred_data)) {
+      cat("Skipping", param, "— sensor column not found\n")
+      next
+    }
+
+    # Predict using fallback-safe helper
+    corrected_data[[corrected_col]] <- predict_best_model(model_info, pred_data)
+
+    cat(sprintf("Applied %s calibration for %s (test R² = %.3f, test RMSE = %.2f)\n",
+                toupper(model_info$model_type), param, model_info$r_squared, model_info$rmse))
+  }
+
+  # Tag all rows with the general method identifier
+  corrected_data$correction_method <- "general_calibration"
+
+  return(corrected_data)
+}
+
+# Apply corrections
+if(exists("general_models") && length(general_models) > 0) {
+  corrected_data <- apply_general_calibration(all_data, general_models)
+
+  cat("\nCorrections applied successfully!\n")
+  cat("Corrected columns:", paste(grep("corrected_", colnames(corrected_data), value = TRUE), collapse = ", "), "\n")
+  cat("correction_method values:", paste(unique(corrected_data$correction_method), collapse = ", "), "\n")
+} else {
+  cat("No general calibration models available for correction.\n")
+  corrected_data <- all_data
+}
+```
+
+#Time Series Plots
+
+```{r time-series-visualization, echo=TRUE, message=FALSE, warning=FALSE}
+# Simple time series comparison
+create_simple_plots <- function() {
+  
+  if(!exists("corrected_data")) {
+    cat("Corrected data not available.\n")
+    return(NULL)
+  }
+  
+  # Parameters to visualize
+  parameters <- list(
+    "o3_ppb" = "Ozone (ppb)",
+    "pm1_ugm3" = "PM1 (μg/m³)", 
+    "pm25_ugm3" = "PM2.5 (μg/m³)",
+    "pm10_ugm3" = "PM10 (μg/m³)"
+  )
+  
+  for(param in names(parameters)) {
+    param_label <- parameters[[param]]
+    vaisala_col <- paste0(param, "_vaisala")
+    corrected_col <- paste0("corrected_", param)
+    
+    arduino_col <- paste0(param, "_arduino")
+    
+    # Ensure all required columns exist
+    if(!(vaisala_col %in% colnames(corrected_data) &&
+         arduino_col %in% colnames(corrected_data) &&
+         corrected_col %in% colnames(corrected_data))) next
+    
+    # Build plotting data with raw timestamps in UTC
+    plot_data <- corrected_data %>%
+      dplyr::select(timestamp, all_of(c(vaisala_col, arduino_col, corrected_col))) %>%
+      mutate(timestamp = parse_to_utc(timestamp)) %>%
+      filter(if_any(all_of(c(vaisala_col, arduino_col, corrected_col)), ~ !is.na(.x)))
+    
+    if(nrow(plot_data) < 3) next
+    
+    # Simple time-series plot with three series and proper legend
+    p <- ggplot(plot_data, aes(x = timestamp)) +
+      geom_line(aes(y = .data[[arduino_col]], color = "Arduino original", linetype = "Arduino original"),
+                alpha = 0.7, linewidth = 0.6) +
+      geom_line(aes(y = .data[[corrected_col]], color = "Arduino corrected", linetype = "Arduino corrected"),
+                alpha = 0.7, linewidth = 0.6) +
+      geom_line(aes(y = .data[[vaisala_col]], color = "Vaisala reference", linetype = "Vaisala reference"),
+                alpha = 0.7, linewidth = 0.6) +
+      labs(
+        title = paste("Time Series:", param_label),
+        x = "Timestamp",
+        y = param_label,
+        color = NULL,
+        linetype = NULL
+      ) +
+      theme_minimal() +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+      scale_color_manual(values = c(
+        "Arduino original" = "red",
+        "Arduino corrected" = "blue",
+        "Vaisala reference" = "green"
+      )) +
+      scale_linetype_manual(values = c(
+        "Arduino original" = "dashed",
+        "Arduino corrected" = "dotted",
+        "Vaisala reference" = "solid"
+      ))
+    
+    print(p)
+  }
+}
+
+create_simple_plots()
+```
+
+#Comparisons
+```{r paired-comparisons, echo=TRUE, message=FALSE, warning=FALSE}
+# Paired comparisons: (1) Arduino original vs corrected, (2) Corrected vs Vaisala
+create_comparison_plots <- function() {
+  
+  if(!exists("corrected_data")) {
+    cat("Corrected data not available.\n")
+    return(NULL)
+  }
+  
+  parameters <- list(
+    "o3_ppb" = "Ozone (ppb)",
+    "pm1_ugm3" = "PM1 (μg/m³)",
+    "pm25_ugm3" = "PM2.5 (μg/m³)",
+    "pm10_ugm3" = "PM10 (μg/m³)"
+  )
+  
+  for(param in names(parameters)) {
+    param_label <- parameters[[param]]
+    arduino_col <- paste0(param, "_arduino")
+    corrected_col <- paste0("corrected_", param)
+    vaisala_col <- paste0(param, "_vaisala")
+    
+    needed_cols <- c("timestamp", arduino_col, corrected_col, vaisala_col)
+    if(!all(needed_cols %in% colnames(corrected_data))) next
+    
+    plot_data <- corrected_data %>%
+      dplyr::select(all_of(needed_cols)) %>%
+      mutate(timestamp = parse_to_utc(timestamp)) %>%
+      filter(if_any(all_of(needed_cols[-1]), ~ !is.na(.x)))
+    
+    if(nrow(plot_data) < 3) next
+    
+    # (1) Arduino original vs Arduino corrected
+    p1 <- ggplot(plot_data, aes(x = timestamp)) +
+      geom_line(aes(y = .data[[arduino_col]], color = "Arduino original", linetype = "Arduino original"),
+                alpha = 0.8, linewidth = 0.6) +
+      geom_line(aes(y = .data[[corrected_col]], color = "Arduino corrected", linetype = "Arduino corrected"),
+                alpha = 0.8, linewidth = 0.6) +
+      labs(
+        title = paste(param_label, "— Original vs Corrected"),
+        x = "Timestamp",
+        y = param_label,
+        color = NULL,
+        linetype = NULL
+      ) +
+      theme_minimal() +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+      scale_color_manual(values = c(
+        "Arduino original" = "red",
+        "Arduino corrected" = "blue"
+      )) +
+      scale_linetype_manual(values = c(
+        "Arduino original" = "dashed",
+        "Arduino corrected" = "solid"
+      ))
+    print(p1)
+    
+    # (2) Arduino corrected vs Vaisala reference
+    p2 <- ggplot(plot_data, aes(x = timestamp)) +
+      geom_line(aes(y = .data[[corrected_col]], color = "Arduino corrected", linetype = "Arduino corrected"),
+                alpha = 0.8, linewidth = 0.6) +
+      geom_line(aes(y = .data[[vaisala_col]], color = "Vaisala reference", linetype = "Vaisala reference"),
+                alpha = 0.8, linewidth = 0.6) +
+      labs(
+        title = paste(param_label, "— Corrected vs Vaisala"),
+        x = "Timestamp",
+        y = param_label,
+        color = NULL,
+        linetype = NULL
+      ) +
+      theme_minimal() +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+      scale_color_manual(values = c(
+        "Arduino corrected" = "blue",
+        "Vaisala reference" = "green"
+      )) +
+      scale_linetype_manual(values = c(
+        "Arduino corrected" = "dotted",
+        "Vaisala reference" = "solid"
+      ))
+    print(p2)
+  }
+}
+
+create_comparison_plots()
+```
+
+
+# Barkjohn (EPA) PM2.5 Comparison
+```{r barkjohn-comparison, fig.width=10, fig.height=6}
+# -------------------------------------------------------------------------
+# BARKJOHN (EPA) PM2.5 BENCHMARKING
+# -------------------------------------------------------------------------
+# This section implements the standard US EPA correction for PM2.5 
+# (Barkjohn et al., 2021) to benchmark against our custom Vaisala-based RF.
+# Formula: PM2.5_Barkjohn = 0.524 * PM2.5_raw - 0.0862 * RH + 5.75
+# -------------------------------------------------------------------------
+
+if(exists("all_data_hourly") && nrow(all_data_hourly) > 0) {
+  cat("\n=== Benchmarking against Barkjohn (EPA) PM2.5 Correction ===\n")
+  
+  # 1. Apply Barkjohn correction
+  # Using CF=1 (which is the default assumption for the 0.524 factor)
+  barkjohn_data <- all_data_hourly %>%
+    mutate(
+      pm25_barkjohn = 0.524 * pm25_ugm3_arduino - 0.0862 * humidity_perc_rh_arduino + 5.75
+    ) %>%
+    filter(!is.na(pm25_barkjohn), !is.na(pm25_ugm3_vaisala))
+  
+  # 2. Get our RF correction for comparison (if available)
+  # We can use the Stage 1 general model for this benchmark
+  if(!is.null(general_models) && "pm25_ugm3" %in% names(general_models)) {
+    pred_df <- build_rf_pred_df(barkjohn_data, "pm25_ugm3", type = "arduino")
+    if(!is.null(pred_df)) {
+      barkjohn_data$pm25_rf_custom <- predict_best_model(general_models[["pm25_ugm3"]], pred_df)
+    }
+  }
+  
+  # 3. Calculate Performance Metrics
+  metrics <- barkjohn_data %>%
+    summarise(
+      barkjohn_r2 = 1 - sum((pm25_ugm3_vaisala - pm25_barkjohn)^2) / sum((pm25_ugm3_vaisala - mean(pm25_ugm3_vaisala))^2),
+      barkjohn_rmse = sqrt(mean((pm25_ugm3_vaisala - pm25_barkjohn)^2)),
+      rf_custom_r2 = if("pm25_rf_custom" %in% colnames(.)) 
+                       1 - sum((pm25_ugm3_vaisala - pm25_rf_custom)^2) / sum((pm25_ugm3_vaisala - mean(pm25_ugm3_vaisala))^2) 
+                     else NA_real_,
+      rf_custom_rmse = if("pm25_rf_custom" %in% colnames(.)) 
+                         sqrt(mean((pm25_ugm3_vaisala - pm25_rf_custom)^2)) 
+                       else NA_real_
+    )
+  
+  cat("PM2.5 Performance Table:\n")
+  print(round(metrics, 4))
+  
+  # 4. Visualization
+  plot_long <- barkjohn_data %>%
+    dplyr::select(timestamp, pm25_ugm3_vaisala, pm25_barkjohn, 
+           any_of("pm25_rf_custom")) %>%
+    pivot_longer(cols = -timestamp, names_to = "Method", values_to = "PM25") %>%
+    mutate(Method = factor(Method, 
+                          levels = c("pm25_ugm3_vaisala", "pm25_rf_custom", "pm25_barkjohn"),
+                          labels = c("Vaisala (Reference)", "Custom RF (Stage 1)", "Barkjohn (EPA)")))
+  
+  p_comp <- ggplot(plot_long, aes(x = timestamp, y = PM25, color = Method)) +
+    geom_line(alpha = 0.7) +
+    labs(
+      title = "PM2.5 Correction Benchmark: Custom RF vs Barkjohn (EPA)",
+      subtitle = sprintf("Vaisala-based RF R²: %.3f | Barkjohn R²: %.3f", 
+                         metrics$rf_custom_r2, metrics$barkjohn_r2),
+      x = "Timestamp",
+      y = "PM2.5 (μg/m³)",
+      color = "Method"
+    ) +
+    theme_minimal() +
+    theme(legend.position = "bottom") +
+    scale_color_manual(values = c("Vaisala (Reference)" = "black", 
+                                "Custom RF (Stage 1)" = "blue", 
+                                "Barkjohn (EPA)" = "red"))
+  
+  print(p_comp)
+  
+} else {
+  cat("Insufficient data in all_data_hourly for Barkjohn comparison.\n")
+}
+```
+
