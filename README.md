@@ -8,7 +8,7 @@ Code accompanying:
 
 > Neftaliem, L., Rich, R. L., Mady, R., Jackson, R. B., Field, C. B., Brown Jr., D., Lucchese, V. M., LaGorga, L., Vishwanath, L. R., Smith, T., & Cawood, A. **Pollution inequity and social vulnerability: evidence from a low-cost sensor network in Baltimore, Maryland.** *In preparation.*
 
-This repository contains the analysis code and Arduino firmware used to deploy and analyze a network of low-cost particulate matter (PM2.5/PM10) and temperature sensors across Baltimore, Maryland, and to relate exposure patterns to social vulnerability and historical redlining (HOLC grades).
+This repository contains the analysis code and Arduino firmware used to deploy and analyze a network of low-cost particulate matter (PM<sub>2.5</sub>/PM<sub>10</sub>) and temperature sensors across Baltimore, Maryland, and to relate exposure patterns to social vulnerability and historical redlining (HOLC grades).
 
 ## Overview
 
@@ -16,7 +16,7 @@ Breathe Baltimore is a community-based research project aimed at addressing air 
 
 To learn more about each pollutant and their effects, [visit the project website](https://www.ejji.org/air-quality-monitoring-in-baltimore).
 
-## Repository Structure
+## Repository structure
 
 ```
 code/
@@ -38,7 +38,7 @@ data/                    # Hourly/daily CSVs, Cal_Stations, current_data, and NR
                           # (compressed); only sensor_data/ is not included (see Data availability below).
 ```
 
-## Data Availability
+## Data availability
 
 Most processed and calibration data is included directly in this repository (compressed — see `data/README.md` for exact filenames and one-line reassembly/decompress commands). The one exception is the raw per-site sensor logs, which are too large and voluminous for this workflow and are instead available at:
 
@@ -69,16 +69,16 @@ This layout, along with file formats and column structure, has been verified aga
 
 **R** (analysis scripts): R ≥ 4.2 recommended. Key packages: `tidyverse`, `data.table`, `sf`, `tigris`, `tidycensus`, `spdep`, `spatialreg`, `lme4`, `ranger`, `tmap`, `ggspatial`, `cowplot`, `showtext`. See the `library()` calls at the top of each script for the full list.
 
-**Arduino IDE** (firmware): Boards/libraries used by the sketches in `arduino/` include Adafruit sensor libraries (BME680, PM2.5), a K30 CO2 library, DFRobot ozone sensor library, and **RTClib** (for the real-time clock). Install RTClib via the Arduino Library Manager (Sketch > Include Library > Manage Libraries > search "RTClib") rather than from a bundled zip, so you get a current, licensed release.
+**Arduino IDE** (firmware): Boards/libraries used by the sketches in `arduino/` include Adafruit sensor libraries (BME680, PM<sub>2.5</sub>), a K30 CO2 library, DFRobot ozone sensor library, and **RTClib** (for the real-time clock). Install RTClib via the Arduino Library Manager (Sketch > Include Library > Manage Libraries > search "RTClib") rather than from a bundled zip, so you get a current, licensed release.
 
 ## License
 
 Code in this repository is released under the MIT License (see `LICENSE`). This applies to the code only — see the paper for data licensing/citation terms once the data are formally deposited.
 
-## Who's Involved?
+## Who's involved?
 
 This project is a collaboration between the [Environmental Justice Journalism Initiative (EJJI)](https://www.ejji.org/) and the [Smithsonian Environmental Research Center (SERC)](https://serc.si.edu/). Site stewards and volunteers from the community play an essential role in maintaining the sensors and gathering data.
 
 ## Acknowledgements
 
-This work was conducted in partnership with EJJI and SERC, and with community partners across Baltimore who hosted and maintained monitoring units. 
+This work was conducted in partnership with EJJI and SERC, and with community partners across Baltimore who hosted and maintained monitoring units. See the manuscript for full acknowledgements.
