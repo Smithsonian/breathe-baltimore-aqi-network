@@ -81,4 +81,4 @@ This project is a collaboration between the [Environmental Justice Journalism In
 
 ## Acknowledgements
 
-This work was conducted in partnership with EJJI and SERC, and with community partners across Baltimore who hosted and maintained monitoring units. See the manuscript for full acknowledgements.
+This work was conducted in partnership with EJJI and SERC, and with community partners across Baltimore who hosted and maintained monitoring units. 
