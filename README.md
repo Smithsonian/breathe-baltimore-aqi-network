@@ -28,8 +28,8 @@ arduino/
   RTC__TIMESET_AQLSP/     # Utility sketch to set the real-time clock (RTC) on a unit
                           # before deployment
 
-data/                    # Two pre-computed CSVs included; raw/bulk data not included
-                          # (see Data availability below).
+data/                    # Hourly/daily CSVs, Cal_Stations, and current_data included (compressed);
+                          # sensor_data/ and NRI table not included (see Data availability below).
 ```
 
 ## Data availability
@@ -47,8 +47,9 @@ data/
   bmore_daily_avg_filtered_eastern_time.csv      # included in this repo — pre-computed daily averages
   Cal_Stations.tar.gz                 # included in this repo — site-specific calibration CSVs;
                                        # run `tar -xzf data/Cal_Stations.tar.gz -C data/` once after cloning
+  current_data/                       # included in this repo — AQM_206 co-location files, gzipped
+                                       # (one file split into 2 parts); see data/README.md to reassemble
   sensor_data/                        # not included — per-site raw logs (for bmore_paper_analysis_share.Rmd)
-  current_data/                       # not included — AQM_206 co-location files (for vaisala_arduino_comparison_share.Rmd)
   NRI_Table_CensusTracts.csv          # not included — CDC/ATSDR Social Vulnerability Index by census tract
 ```
 

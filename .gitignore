@@ -4,6 +4,8 @@ data/*
 !data/bmore_hourly_avg_filtered_eastern_time.csv.gz
 !data/bmore_daily_avg_filtered_eastern_time.csv
 !data/Cal_Stations.tar.gz
+!data/current_data
+!data/current_data/*
 
 # R
 .Rhistory
