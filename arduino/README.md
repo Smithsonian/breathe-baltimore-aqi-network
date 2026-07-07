@@ -5,7 +5,7 @@
 Firmware for the deployed sensor units. Split across multiple `.ino` tabs (Arduino IDE loads all `.ino` files in a sketch folder together):
 
 - `MainAQLSP_09262024.ino` — main loop, sensor scheduling, timestamping
-- `ADAFruitPM_25.ino` — particulate matter (PM1/PM2.5/PM10) sensor reads
+- `ADAFruitPM_25.ino` — particulate matter (PM1/PM<sub>2.5</sub>/PM<sub>10</sub>) sensor reads
 - `Bme680__.ino` — temperature, humidity, pressure, VOC
 - `K30__.ino` — CO2 sensor reads
 - `DFROzone_.ino` — ozone sensor reads
@@ -30,7 +30,7 @@ Install via Arduino IDE: **Sketch > Include Library > Manage Libraries**, then s
 
 - **RTClib** (Adafruit) — required by `RTC__TIMESET_AQLSP.ino`
 - Adafruit BME680 library
-- Adafruit PM2.5 AQI library
+- Adafruit PM<sub>2.5</sub> AQI library
 - A K30 CO2 library compatible with the sensor used (check `K30__.ino` for the exact API used)
 - DFRobot ozone sensor library
 
