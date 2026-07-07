@@ -45,9 +45,10 @@ data/
   bmore_hourly_avg_filtered_eastern_time.csv.gz  # included in this repo (gzipped, ~31 MB uncompressed) —
                                                   # pre-computed hourly averages; run `gunzip` once after cloning
   bmore_daily_avg_filtered_eastern_time.csv      # included in this repo — pre-computed daily averages
+  Cal_Stations.tar.gz                 # included in this repo — site-specific calibration CSVs;
+                                       # run `tar -xzf data/Cal_Stations.tar.gz -C data/` once after cloning
   sensor_data/                        # not included — per-site raw logs (for bmore_paper_analysis_share.Rmd)
   current_data/                       # not included — AQM_206 co-location files (for vaisala_arduino_comparison_share.Rmd)
-  Cal_Stations/<site>/                # not included — site-specific calibration CSVs
   NRI_Table_CensusTracts.csv          # not included — CDC/ATSDR Social Vulnerability Index by census tract
 ```
 
