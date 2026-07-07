@@ -28,8 +28,8 @@ arduino/
   RTC__TIMESET_AQLSP/     # Utility sketch to set the real-time clock (RTC) on a unit
                           # before deployment
 
-data/                    # Not included in this repository (see Data Availability below).
-                          # Placeholder folder with expected file layout.
+data/                    # Two pre-computed CSVs included; raw/bulk data not included
+                          # (see Data availability below).
 ```
 
 ## Data availability
