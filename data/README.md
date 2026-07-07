@@ -2,7 +2,7 @@
 
 Two files are included directly in this repository:
 
-- `bmore_hourly_avg_filtered_eastern_time.csv` — pre-computed hourly averages
+- `bmore_hourly_avg_filtered_eastern_time.csv.gz` — pre-computed hourly averages, **gzipped** (the uncompressed CSV is ~31 MB; run `gunzip data/bmore_hourly_avg_filtered_eastern_time.csv.gz` once after cloning to produce the plain `.csv` the code expects)
 - `bmore_daily_avg_filtered_eastern_time.csv` — pre-computed daily averages
 
 With these present, `bmore_paper_analysis_share.Rmd` detects them and skips straight to the modeling/figure stages instead of re-running raw ingestion and calibration.
