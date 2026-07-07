@@ -28,17 +28,17 @@ arduino/
   RTC__TIMESET_AQLSP/     # Utility sketch to set the real-time clock (RTC) on a unit
                           # before deployment
 
-data/                    # Hourly/daily CSVs, Cal_Stations, and current_data included (compressed);
-                          # sensor_data/ and NRI table not included (see Data availability below).
+data/                    # Hourly/daily CSVs, Cal_Stations, current_data, and NRI (Baltimore rows) included
+                          # (compressed); only sensor_data/ is not included (see Data availability below).
 ```
 
 ## Data availability
 
-Raw and processed sensor data are not stored in this repository due to file size. Raw per-site sensor logs are available at:
+Most processed and calibration data is included directly in this repository (compressed — see `data/README.md` for exact filenames and one-line reassembly/decompress commands). The one exception is the raw per-site sensor logs, which are too large and voluminous for this workflow and are instead available at:
 
 **https://drive.google.com/drive/folders/1G2Sug5Wazqn3AGz8W7Hyq0LR-Za3WeDWnEcIL46JQEZ4IYZ62flURge365CDaMpxAYZoYjbT**
 
-To reproduce the analysis locally, recreate the following structure inside a `data/` folder at the repository root (see `data/README.md` for full details):
+The `data/` folder layout (see `data/README.md` for full details):
 
 ```
 data/
@@ -49,13 +49,13 @@ data/
                                        # run `tar -xzf data/Cal_Stations.tar.gz -C data/` once after cloning
   current_data/                       # included in this repo — AQM_206 co-location files, gzipped
                                        # (one file split into 2 parts); see data/README.md to reassemble
+  NRI_Table_CensusTracts.csv          # included in this repo — pre-filtered to Baltimore City rows only
   sensor_data/                        # not included — per-site raw logs (for bmore_paper_analysis_share.Rmd)
-  NRI_Table_CensusTracts.csv          # not included — CDC/ATSDR Social Vulnerability Index by census tract
 ```
 
 `vaisala_arduino_comparison_share.Rmd` falls back to generating synthetic sample data if the expected co-location files are not found, so the calibration pipeline can be inspected without the private dataset. With `bmore_hourly_avg_filtered_eastern_time.csv` and `bmore_daily_avg_filtered_eastern_time.csv` included in `data/`, `bmore_paper_analysis_share.Rmd` will detect them and skip straight to the modeling/figure stages instead of re-running raw ingestion and calibration. `social_vulnerability_map.R` still requires `NRI_Table_CensusTracts.csv` to run to completion.
 
-This layout, along with file formats and column structure, has been verified against the real project data. Note that `NRI_Table_CensusTracts.csv` (~625 MB) and the full `sensor_data/` collection (~110 MB zipped) are too large for a normal git repo — see `data/README.md` for details and a suggested Zenodo/Dryad path if you want the processed data version-controlled or citable.
+This layout, along with file formats and column structure, has been verified against the real project data. `NRI_Table_CensusTracts.csv` is included pre-filtered to Baltimore City rows (the full nationwide table is ~625 MB); the full `sensor_data/` collection (~110 MB zipped) is the only piece too large for this repo's update workflow — see `data/README.md` for details and a suggested Zenodo/Dryad path if you want it version-controlled or citable.
 
 **Time zone note:** raw sensor data is logged in US Eastern Time (America/New_York), with daylight saving time observed. The analysis code converts these timestamps to UTC during ingestion before modeling — see `arduino/README.md` for details.
 

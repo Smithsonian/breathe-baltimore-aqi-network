@@ -6,6 +6,7 @@ data/*
 !data/Cal_Stations.tar.gz
 !data/current_data
 !data/current_data/*
+!data/NRI_Table_CensusTracts.csv
 
 # R
 .Rhistory
