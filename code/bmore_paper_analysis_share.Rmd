@@ -1449,9 +1449,9 @@ temp_data_all <- daily_avg %>%
 
 original_n <- nrow(temp_data_all)
 
-# APPLY FILTER: Remove impossible temperatures below 20°C in summer
+# APPLY FILTER: Remove impossible temperatures below 5°C in summer
 temp_data <- temp_data_all %>%
-  filter(!(season_base == "Summer" & bme_temp_c_avg < 20))
+  filter(!(season_base == "Summer" & bme_temp_c_avg < 5))
 
 anomalies_removed <- original_n - nrow(temp_data)
 
