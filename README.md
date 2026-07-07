@@ -2,7 +2,7 @@
 
 Code accompanying:
 
-> Neftaliem, L., Rich, R. L., Mady, R., Jackson, R. B., Field, C. B., Brown Jr., D., Lucchese, V. M., LaGorga, L., Vishwanath, L. R., Smith, T., & Cawood, A. **Pollution inequity and social vulnerability: evidence from a low-cost sensor network in Baltimore, Maryland.** *Environmental Research Letters* (in review).
+> Neftaliem, L., Rich, R. L., Mady, R., Jackson, R. B., Field, C. B., Brown Jr., D., Lucchese, V. M., LaGorga, L., Vishwanath, L. R., Smith, T., & Cawood, A. **Pollution inequity and social vulnerability: evidence from a low-cost sensor network in Baltimore, Maryland.** *In preparation.*
 
 This repository contains the analysis code and Arduino firmware used to deploy and analyze a network of low-cost particulate matter (PM2.5/PM10) and temperature sensors across Baltimore, Maryland, and to relate exposure patterns to social vulnerability and historical redlining (HOLC grades).
 

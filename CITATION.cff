@@ -25,10 +25,9 @@ authors:
   - family-names: "Cawood"
     given-names: "Alison"
 preferred-citation:
-  type: article
+  type: unpublished
   title: "Pollution inequity and social vulnerability: evidence from a low-cost sensor network in Baltimore, Maryland"
-  journal: "Environmental Research Letters"
-  status: "in review"
+  notes: "In preparation."
   authors:
     - family-names: "Neftaliem"
       given-names: "Leona"
