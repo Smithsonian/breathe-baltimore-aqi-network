@@ -1,0 +1,25 @@
+# Data (see data/README.md - not tracked in this repo)
+data/*
+!data/README.md
+
+# R
+.Rhistory
+.RData
+.Rproj.user/
+*.Rproj
+
+# Output artifacts
+*.pdf
+*.tiff
+*.png
+!arduino/**/*.png
+figures/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Arduino build artifacts
+*.hex
+*.elf
+build/
