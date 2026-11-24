@@ -1,0 +1,35 @@
+QC-flagged site-days: 190 
+  PM recalibrated from matched valid hours: 93 
+  PM excluded (no valid T/RH hour, cannot be calibrated): 97 
+                 site flagged excluded_pm median_valid_share
+ 1: WestCovingtonPark      85          50               0.00
+ 2:               Ark      52          27               0.00
+ 3:   FederalHillPrep      12           7               0.00
+ 4:          ToolBank       8           1               0.92
+ 5:          BayBrook       7           1               0.75
+ 6:    StrengthToLove       6           0               0.89
+ 7:  ConventionCenter       6           1               0.89
+ 8:           Filbert       5           3               0.00
+ 9:        Waterfront       4           3               0.00
+10:       Stillmeadow       3           3               0.00
+11:              BUGS       2           1               0.46
+
+Stage 2 site-days by scenario:
+                 site A_from_1Dec B_after_coloc C_before_coloc
+ 1:          BayBrook           9             2            164
+ 2:          ToolBank          18            14            232
+ 3:    StrengthToLove          17            17             58
+ 4:        ALotMatter          19            19            182
+ 5:        Waterfront           3             3             84
+ 6:       FortMcHenry           0             0              0
+ 7:               Ark           0             0              0
+ 8:  ConventionCenter           0             0              0
+ 9: WestCovingtonPark           0             0              0
+10:              BUGS           0             0              0
+11:   FederalHillPrep           0             0              0
+12:           Filbert          15            11             78
+13:       Stillmeadow           0             0              0
+14:         Bilingual           0             0              0
+15:           Barclay           0             0              0
+
+Unflagged rows: Stage 1 reproduces stored values, max |diff| PM2.5 = 0.129 
