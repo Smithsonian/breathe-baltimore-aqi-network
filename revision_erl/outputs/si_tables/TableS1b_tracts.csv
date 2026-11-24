@@ -1,0 +1,16 @@
+Site,Recorded tract,CDC SVI (recorded),Address tract,Coordinate tract,CDC SVI (coordinate),Group (all assignments),Status
+1,1604.00,0.8518,1604.00,1604.00,0.8518,High,Consistent
+2,0909.00,0.8963,0909.00,2503.01,0.8385,High,To confirm
+3,2504.02,0.8910,2505.00,2505.00,0.8146,High,To confirm
+4,2604.04,0.8012,2604.04,2604.04,0.8012,High,Consistent
+5,2403.00,0.0560,2403.00,2403.00,0.0560,Low,Consistent
+6,2504.02,0.8910,2505.00,2505.00,0.8146,High,To confirm
+7,2101.00,0.5327,2101.00,2101.00,0.5327,Medium (merged),Consistent
+8,2201.00,0.3903,2201.00,2201.00,0.3903,Medium (merged),Consistent
+9,2804.03,0.5005,2804.03,2501.01,0.5996,Medium (merged),To confirm
+10,1502.00,0.6575,1502.00,1502.00,0.6575,Medium (merged),Consistent
+11,0302.00,0.4375,2201.00,0302.00,0.4375,Medium (merged),To confirm
+12,0203.00,0.0783,0203.00,0203.00,0.0783,Low,Consistent
+13,2401.00,0.0464,no address on file,2401.00,0.0464,Low,Consistent
+14,2303.00,0.1247,2303.00,2303.00,0.1247,Low,Consistent
+15,1202.01,0.1606,1202.01,1202.01,0.1606,Low,Consistent

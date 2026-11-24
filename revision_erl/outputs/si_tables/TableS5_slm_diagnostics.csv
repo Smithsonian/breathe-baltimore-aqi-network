@@ -1,0 +1,5 @@
+Outcome and inclusion rule,Days fitted,Days with ≤ 0 residual df,Days with 1-2 residual df,Days p < 0.05 (asymptotic z),of which ≤ 0 residual df,Median sites per day
+"PM2.5 AQI, ≥ 3 sites",377,259,61,98,44,6
+"PM10 AQI, ≥ 3 sites",377,259,61,97,44,6
+"PM2.5 AQI, ≥ 5 sites (≥ 3 in 2026)",291,173,61,98,44,7
+"PM10 AQI, ≥ 5 sites (≥ 3 in 2026)",291,173,61,97,44,7
