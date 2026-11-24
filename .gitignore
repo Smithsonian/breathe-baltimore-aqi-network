@@ -30,3 +30,11 @@ Thumbs.db
 *.hex
 *.elf
 build/
+
+# Revised analysis (revision_erl/): keep inputs, scripts and the outputs/figures they produce
+!revision_erl/figures_final/*.png
+!revision_erl/figures_final/*.pdf
+revision_erl/inputs/Cal_Stations/
+revision_erl/logs/
+revision_erl/inputs/general_correction_coefficients.rds
+revision_erl/inputs/bmore_hourly_avg_filtered_backup_est.csv.gz
