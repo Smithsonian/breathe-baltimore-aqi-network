@@ -1,0 +1,16 @@
+site,recorded_score,recorded_group,nri_match_tract,coord_tract_census_geocoder,nri_sovi_score_recorded_tract,nri_sovi_score_coord_tract,cdc_svi2020_rpl_recorded_tract,cdc_svi2020_rpl_coord_tract,cdc_map_category_recorded_tract,note
+ALotMatter,81.58,High,24510160400,24510160400,81.58,81.58,0.8518,0.8518,High,match
+Ark,88.13,High,24510090900,24510250301,88.13,80.19,0.8963,0.8385,High,recorded score is for tract 0909 (Oliver; matches the street address on file); coordinates fall in tract 2503.01 (Westport; tracking sheet neighborhood Westport)
+BayBrook,90.14,High,24510250402,24510250500,90.14,82.79,0.8910,0.8146,High,coordinates fall in a different tract than the scored one
+Bilingual,73.29,High,24510260404,24510260404,73.29,73.29,0.8012,0.8012,High,NRI 73.29 would be Medium-High on the CDC map; CDC RPL 0.8012 is High
+FederalHillPrep,4.82,Low,24510240300,24510240300,4.82,4.82,0.0560,0.0560,Low,match
+Filbert,90.14,High,24510250402,24510250500,90.14,82.79,0.8910,0.8146,High,coordinates fall in a different tract than the scored one
+ToolBank,49.05,Moderate,24510210100,24510210100,49.05,49.05,0.5327,0.5327,Medium-High,match
+ConventionCenter,43.66,Moderate,24510220100,24510220100,43.66,43.66,0.3903,0.3903,Low-Medium,match
+Stillmeadow,49.92,Moderate,24510280403,24510250101,49.92,60.82,0.5005,0.5996,Medium-High,coordinates fall in a different tract than the scored one
+StrengthToLove,62.09,Moderate,none (nearest 24510150200 = 62.01),24510150200,62.01,62.01,0.6575,0.6575,Medium-High,recorded 62.09 vs NRI 62.01 for the coordinate tract: likely transcription error
+Waterfront,42.30,Moderate,24510030200,24510030200,42.30,42.30,0.4375,0.4375,Low-Medium,match
+BUGS,9.55,Low,24510020300,24510020300,9.55,9.55,0.0783,0.0783,Low,match
+FortMcHenry,5.27,Low,24510240100,24510240100,5.27,5.27,0.0464,0.0464,Low,match
+WestCovingtonPark,8.74,Low,24510230300,24510230300,8.74,8.74,0.1247,0.1247,Low,match
+Barclay,11.80,Low,24510120201,24510120201,11.80,11.80,0.1606,0.1606,Low,match

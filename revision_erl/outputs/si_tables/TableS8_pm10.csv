@@ -1,0 +1,9 @@
+Outcome,Specification,Estimate,95% CI,p,p (permutation)
+PM10,Primary,-0.012,-0.221 to +0.197,0.90,
+PM10,FEMA NRI,-0.026,-0.238 to +0.186,0.79,
+PM10,"Two-stage, unweighted",-0.000,-0.190 to +0.189,1.00,1.00
+PM10,Stage 1 only,+0.103,-0.054 to +0.259,0.18,
+PM10,Excluding replacement-unit data,-0.013,-0.224 to +0.198,0.90,
+PM10,HOLC grade omnibus,F = 0.02,denominator df 10.9,1.00,
+PM10,Group contrast Medium (merged) - Low (Dunnett),+0.49,-1.54 to +2.51,0.77,
+PM10,Group contrast High - Low (Dunnett),-0.22,-2.19 to +1.75,0.93,

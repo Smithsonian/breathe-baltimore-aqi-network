@@ -1,0 +1,25 @@
+Outcome,Specification,Estimate,95% CI,p,p (permutation)
+PM2.5,"Primary: CDC SVI 2020, recorded tracts",+0.027,-0.043 to +0.098,0.41,
+PM2.5,Parametric bootstrap (199 draws),+0.027,-0.035 to +0.087,,
+PM2.5,Continuous-time AR(1) errors (phi = 0.25 per day),+0.026,SE 0.032 (SE without AR 0.032),,
+PM2.5,"CDC SVI, street-address tracts",+0.031,-0.041 to +0.104,0.37,
+PM2.5,"CDC SVI, coordinate tracts",+0.032,-0.041 to +0.106,0.36,
+PM2.5,FEMA NRI social vulnerability (submitted variable),+0.024,-0.048 to +0.096,0.48,
+PM2.5,"FEMA NRI, coordinate tracts",+0.028,-0.048 to +0.105,0.43,
+PM2.5,"Two-stage: site effects on SVI, unweighted (df 13)",+0.048,-0.040 to +0.135,0.26,0.26
+PM2.5,Two-stage: inverse-variance weighted (df 13),+0.028,-0.044 to +0.099,0.42,0.42
+PM2.5,Sites with ≥ 30 days (13 sites),+0.021,-0.051 to +0.093,0.53,
+PM2.5,Leave-one-site-out (range of 15 estimates),+0.003 to +0.056,,,
+PM2.5,"Log scale, log(PM2.5 + 0.5): ratio per 0.1 SVI",1.004,0.981 to 1.027,0.72,
+PM2.5,Calibration: Stage 1 only,+0.046,-0.012 to +0.104,0.11,
+PM2.5,Calibration: 1 Dec 2025 rule by site label (incl. replacement unit),+0.026,-0.048 to +0.100,0.46,
+PM2.5,Calibration: submitted (label-swapped) Stage 2 coefficients,+0.032,-0.030 to +0.094,0.29,
+PM2.5,"Calibration: Batch 2 units (Sites 7, 11) at Stage 1",+0.027,-0.041 to +0.095,0.40,
+PM2.5,Calibration: Site 3 post-Dec data at Stage 1 (channel-label question),+0.028,-0.043 to +0.099,0.40,
+PM2.5,Excluding replacement-unit data (Site 10),+0.027,-0.044 to +0.097,0.43,
+PM2.5,Excluding post-1-Dec site-days without Stage 2,+0.029,-0.041 to +0.100,0.38,
+PM2.5,QC: network-median T/RH instead of excluding uncalibratable days,+0.027,-0.042 to +0.096,0.42,
+Temperature,Primary,-0.044,-0.152 to +0.065,0.40,
+Temperature,FEMA NRI social vulnerability,-0.050,-0.158 to +0.059,0.34,
+Temperature,"Two-stage, unweighted",-0.040,-0.146 to +0.066,0.43,0.42
+Temperature,Parametric bootstrap (199 draws),-0.044,-0.146 to +0.063,,

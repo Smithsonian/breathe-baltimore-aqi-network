@@ -1,0 +1,82 @@
+All hourly records with RH = 100% (>= 99.999): 58 
+Flagged as stuck (all RH = 100% records): 58 
+Temperature range of RH = 100% records: 33.28 to 34.79 C
+Hours with RH between 99 and 99.999%: 2  (temperatures 2.4 to 20.9 C)
+
+Flagged hours: temperature, network median temperature and network median RH at the same hour
+                 site      timestamp_hour     T T_net RH_net
+ 1:          BayBrook 2025-03-25 09:00:00 33.90  13.9     31
+ 2:          ToolBank 2025-04-11 15:00:00 34.60   9.9     88
+ 3:        Waterfront 2025-04-20 00:00:00 34.16  23.5     62
+ 4:          ToolBank 2025-05-28 12:00:00 34.60  13.9     90
+ 5:       Stillmeadow 2025-05-29 08:00:00 34.46  16.5     87
+ 6:       Stillmeadow 2025-06-07 21:00:00 34.46  26.3     68
+ 7:          ToolBank 2025-06-09 08:00:00 34.60  21.7     89
+ 8: WestCovingtonPark 2025-06-11 21:00:00 33.28  27.5     52
+ 9:       Stillmeadow 2025-06-14 20:00:00 34.46  23.7     78
+10:          BayBrook 2025-06-16 12:00:00 33.90  19.0     91
+11:   FederalHillPrep 2025-06-16 14:00:00 34.44  19.4     92
+12:          BayBrook 2025-06-18 21:00:00 33.90  26.3     87
+13: WestCovingtonPark 2025-08-01 10:00:00 33.28  22.4     76
+14:               Ark 2025-08-20 12:00:00 34.47  24.1     88
+15: WestCovingtonPark 2025-08-20 12:00:00 34.47  24.1     88
+16:   FederalHillPrep 2025-08-23 11:00:00 34.44  27.8     48
+17:   FederalHillPrep 2025-08-23 20:00:00 34.44  25.4     65
+18:   FederalHillPrep 2025-08-31 20:00:00 34.44  24.5     49
+19:    StrengthToLove 2025-09-30 09:00:00 34.41  27.7     73
+20:    StrengthToLove 2025-09-30 10:00:00 34.41  27.3     69
+21: WestCovingtonPark 2025-10-14 08:00:00 34.51  17.9     82
+22: WestCovingtonPark 2025-10-14 09:00:00 34.51  17.4     75
+23:        Waterfront 2025-10-15 08:00:00 34.16  18.2     68
+24:   FederalHillPrep 2025-10-16 19:00:00 34.44  17.6     33
+25:        Waterfront 2025-10-24 07:00:00 34.16  13.0     61
+26:        Waterfront 2025-10-26 18:00:00 34.16  17.8     39
+27:   FederalHillPrep 2025-10-28 18:00:00 34.44  17.3     57
+28: WestCovingtonPark 2025-10-31 14:00:00 34.51  19.4     33
+29:   FederalHillPrep 2025-11-02 18:00:00 34.44  22.2     44
+30:               Ark 2025-11-15 09:00:00 34.79  13.6     61
+31:          BayBrook 2025-12-09 10:00:00 33.90  33.9    100
+32:          BayBrook 2025-12-18 09:00:00 33.90  33.9    100
+33:              BUGS 2025-12-18 16:00:00 34.50  34.5    100
+34:               Ark 2025-12-21 05:00:00 34.79  34.8    100
+35:               Ark 2025-12-21 12:00:00 34.79  34.8    100
+36:               Ark 2025-12-21 13:00:00 34.79  34.8    100
+37:    StrengthToLove 2026-01-06 10:00:00 34.41  34.4    100
+38:           Filbert 2026-02-15 16:00:00 33.88  20.1     89
+39:          ToolBank 2026-03-05 10:00:00 34.60   9.3     98
+40:           Filbert 2026-03-19 20:00:00 33.88  21.8     78
+41:           Filbert 2026-03-21 20:00:00 33.88  25.1     75
+42:           Filbert 2026-03-22 20:00:00 33.88  27.6     81
+43:           Filbert 2026-03-25 20:00:00 33.88  22.7     74
+44:          BayBrook 2026-04-11 01:00:00 33.90  17.8     63
+45:          BayBrook 2026-04-14 07:00:00 33.90  22.4     66
+46:          BayBrook 2026-04-14 08:00:00 33.90  25.1     56
+47:          BayBrook 2026-04-14 09:00:00 33.90  27.1     47
+48:          BayBrook 2026-04-14 20:00:00 33.90  30.8     48
+49:          BayBrook 2026-04-14 21:00:00 33.90  30.5     52
+50:          BayBrook 2026-04-14 22:00:00 33.90  28.5     79
+51:          BayBrook 2026-04-25 08:00:00 33.90  15.8     68
+52:          BayBrook 2026-04-25 09:00:00 33.90  17.4     67
+53:          BayBrook 2026-04-25 10:00:00 33.90  17.8     64
+54:          BayBrook 2026-04-25 11:00:00 33.90  17.7     62
+55:          BayBrook 2026-04-25 12:00:00 33.90  18.0     58
+56:          BayBrook 2026-04-25 13:00:00 33.90  18.2     59
+57:          BayBrook 2026-04-25 20:00:00 33.90  13.1     80
+58:          ToolBank 2026-05-09 12:00:00 34.60  23.4     53
+                 site      timestamp_hour     T T_net RH_net
+
+Unflagged RH = 100% hours: |T - network median| distribution and network RH
+Empty data.table (0 rows and 4 cols): n,med_absdev,max_absdev,med_RH_net
+
+Distinct temperatures among flagged hours per site (repeated identical values indicate a stuck register):
+                 site hours distinct_T     T_range
+ 1:          BayBrook    19          1   33.9-33.9
+ 2:          ToolBank     5          1   34.6-34.6
+ 3:        Waterfront     4          1 34.16-34.16
+ 4:       Stillmeadow     3          1 34.46-34.46
+ 5: WestCovingtonPark     6          3 33.28-34.51
+ 6:   FederalHillPrep     7          1 34.44-34.44
+ 7:               Ark     5          2 34.47-34.79
+ 8:    StrengthToLove     3          1 34.41-34.41
+ 9:              BUGS     1          1   34.5-34.5
+10:           Filbert     5          1 33.88-33.88

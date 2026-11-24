@@ -6,7 +6,9 @@
 
 Code accompanying:
 
-> Neftaliem, L., Rich, R. L., Mady, R., Jackson, R. B., Field, C. B., Brown Jr., D., Lucchese, V. M., LaGorga, L., Vishwanath, L. R., Smith, T., & Cawood, A. **Pollution inequity and social vulnerability: evidence from a low-cost sensor network in Baltimore, Maryland.** *In preparation.*
+> Neftaliem, L., Rich, R. L., LaGorga, L., Mady, R., Vishwanath, L. R., Smith, T., Jackson, R. B., Field, C. B., Brown Jr., D., Lucchese, V. M., & Cawood, A. **Particulate matter, temperature, social vulnerability and historical redlining across Baltimore neighborhoods: a community-partnered low-cost sensor network.** *Manuscript under review.*
+
+**Reproducing the revised manuscript:** the revised analysis lives in [`revision_erl/`](revision_erl/). Run `bash revision_erl/run_all.sh` to rebuild every number, table and figure in the revised manuscript and Supplementary Information; [`revision_erl/README.md`](revision_erl/README.md) maps each figure and table to the script that makes it. The code in `code/` is the analysis as originally submitted and is kept unchanged.
 
 This repository contains the analysis code and Arduino firmware used to deploy and analyze a network of low-cost particulate matter (PM<sub>2.5</sub>/PM<sub>10</sub>) and temperature sensors across Baltimore, Maryland, and to relate exposure patterns to social vulnerability and historical redlining (HOLC grades).
 
@@ -19,6 +21,9 @@ To learn more about each pollutant and their effects, [visit the project website
 ## Repository structure
 
 ```
+revision_erl/                           # Revised analysis (2026 revision): scripts, inputs,
+                                         # run_all.sh, and a figure/table map in its README
+
 code/
   bmore_paper_analysis_share.Rmd        # Main analysis: data ingestion, calibration,
                                          # spatial lag models, ANCOVA/HOLC analyses, Figs 1-4
