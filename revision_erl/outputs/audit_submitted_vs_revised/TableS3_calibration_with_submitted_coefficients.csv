@@ -1,0 +1,15 @@
+Stage,Site,Pollutant,R2 (test),RMSE (µg/m³),N,Slope (corrected),Intercept (corrected),R2 Stage 2 (corrected),Slope (submitted),Intercept (submitted),R2 (submitted)
+1: General (RF),All,PM2.5,0.47,3.53,"1,619",,,,,,
+1: General (RF),All,PM10,0.13,9.74,"1,619",,,,,,
+2: Site-specific (OLS),1,PM2.5,,,142,0.719,-1.55,0.559,0.673,-1.22,0.038
+2: Site-specific (OLS),1,PM10,,,142,0.370,0.41,0.255,0.771,-6.54,0.151
+2: Site-specific (OLS),3,PM2.5,,,139,0.411,-0.49,0.505,0.392,-0.88,0.093
+2: Site-specific (OLS),3,PM10,,,139,0.129,2.45,0.022,0.321,-0.71,0.027
+2: Site-specific (OLS),6,PM2.5,,,142,0.623,-1.27,0.492,0.905,-2.06,0.095
+2: Site-specific (OLS),6,PM10,,,142,0.253,1.16,0.208,0.880,-7.13,0.139
+2: Site-specific (OLS),7,PM2.5,,,629,-0.095,4.52,0.000,0.220,3.38,0.001
+2: Site-specific (OLS),7,PM10,,,629,4.288,-21.48,0.066,9.236,-93.03,0.088
+2: Site-specific (OLS),10,PM2.5,,,139,0.375,-0.41,0.536,0.394,-0.88,0.089
+2: Site-specific (OLS),10,PM10,,,139,0.121,2.45,0.026,0.369,-1.43,0.040
+2: Site-specific (OLS),11,PM2.5,,,629,0.385,2.73,0.019,0.033,4.08,0.000
+2: Site-specific (OLS),11,PM10,,,629,3.013,-11.99,0.196,-1.062,34.64,0.002
